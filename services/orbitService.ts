@@ -20,7 +20,7 @@ export const getSatellitePosition = (sat: SatelliteInfo, date: Date) => {
   const positionEci = positionAndVelocity.position;
   const velocityEci = positionAndVelocity.velocity;
 
-  if (!positionEci || !velocityEci) return null;
+  if (!positionEci || !velocityEci || typeof positionEci !== 'object') return null;
 
   const gmst = satellite.gstime(date);
   const positionEcf = satellite.eciToEcf(positionEci, gmst);
@@ -39,22 +39,21 @@ export const getSatellitePosition = (sat: SatelliteInfo, date: Date) => {
 };
 
 /**
- * 动态预测轨道路径
- * 解决不重合问题：为路径上的每个点计算对应的未来时刻 GMST
+ * 获取瞬时轨道路径（闭合椭圆）
  */
 export const getOrbitPath = (sat: SatelliteInfo, startTime: Date) => {
   if (!satellite) return [];
 
-  // 计算精确的轨道周期 (分钟)
-  // satrec.no 是平均运动 (弧度/分钟)
+  // 获取当前的恒星时，作为整条轨道线的参考坐标系
+  const gmst = satellite.gstime(startTime);
+  
+  // 计算轨道周期 (分钟)
   const meanMotionRadMin = sat.satrec.no; 
   const periodMinutes = (2 * Math.PI) / meanMotionRadMin;
 
   const positions: {x: number, y: number, z: number}[] = [];
   const startMs = startTime.getTime();
-  
-  // 使用较高的采样率以保证曲线平滑
-  const segments = 120; 
+  const segments = 120; // 采样点数量
   
   for (let i = 0; i <= segments; i++) {
     const fraction = i / segments;
@@ -65,9 +64,8 @@ export const getOrbitPath = (sat: SatelliteInfo, startTime: Date) => {
     const posEci = pv.position;
 
     if (posEci && typeof posEci === 'object') {
-      // 关键优化：使用该点对应未来时刻的 gmst，而不是固定的 startTime gmst
-      // 这能让轨道考虑地球自转，与卫星实际运行轨迹完全一致
-      const gmst = satellite.gstime(futureDate);
+      // 关键改进：使用固定的 gmst 转换所有点
+      // 这会生成一个在当前地球坐标系下的静态轨道环，消除自转导致的“缺口”
       const posEcf = satellite.eciToEcf(posEci, gmst);
 
       positions.push({
@@ -76,6 +74,11 @@ export const getOrbitPath = (sat: SatelliteInfo, startTime: Date) => {
         z: posEcf.z * 1000
       });
     }
+  }
+
+  // 强制闭合：SGP4 哪怕在一个周期内也会因为摄动产生极小的漂移，这里手动闭合
+  if (positions.length > 0) {
+    positions[positions.length - 1] = { ...positions[0] };
   }
 
   return positions;
