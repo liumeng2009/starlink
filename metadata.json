@@ -1,0 +1,5 @@
+{
+  "name": "Starlink Visualizer",
+  "description": "A high-performance 3D visualization of Starlink satellite constellations using CesiumJS and real-time orbital propagation.",
+  "requestFramePermissions": []
+}
