@@ -14,9 +14,6 @@ export const initializeSatellites = (tles: TLEData[]): SatelliteInfo[] => {
   }).filter(Boolean) as SatelliteInfo[];
 };
 
-/**
- * 更新卫星位置 - 极致优化版
- */
 export const updateSatellitePositionResult = (sat: SatelliteInfo, date: Date, result: any) => {
   if (!satellite) return false;
   
@@ -28,16 +25,14 @@ export const updateSatellitePositionResult = (sat: SatelliteInfo, date: Date, re
   const gmst = satellite.gstime(date);
   const positionEcf = satellite.eciToEcf(positionEci, gmst);
   
-  // 单位转换：km -> m
   result.x = positionEcf.x * 1000;
   result.y = positionEcf.y * 1000;
   result.z = positionEcf.z * 1000;
   
-  // 仅在需要详情时计算高度和速度
   if (result.detailed) {
     const velocityEci = positionAndVelocity.velocity;
     if (velocityEci) {
-        result.velocity = Math.sqrt(Math.pow(velocityEci.x, 2) + Math.pow(velocityEci.y, 2) + Math.pow(velocityEci.z, 2));
+        result.velocity = Math.sqrt(velocityEci.x * velocityEci.x + velocityEci.y * velocityEci.y + velocityEci.z * velocityEci.z);
     }
     const geodetic = satellite.eciToGeodetic(positionEci, gmst);
     result.height = geodetic.height;
@@ -61,12 +56,10 @@ export const getOrbitPath = (sat: SatelliteInfo, startTime: Date) => {
 
   const positions: {x: number, y: number, z: number}[] = [];
   const startMs = startTime.getTime();
-  const segments = 60; // 进一步降低段数，仅用于选中后的视觉参考，对性能影响巨大
+  const segments = 45; // 进一步平衡精度与性能
   
   for (let i = 0; i <= segments; i++) {
-    const fraction = i / segments;
-    const offsetMs = fraction * periodMinutes * 60 * 1000;
-    const futureDate = new Date(startMs + offsetMs);
+    const futureDate = new Date(startMs + (i / segments) * periodMinutes * 60000);
     const gmst = satellite.gstime(futureDate);
     const pv = satellite.propagate(sat.satrec, futureDate);
     const posEci = pv.position;

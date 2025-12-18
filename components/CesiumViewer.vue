@@ -26,34 +26,24 @@ const SATELLITE_SVG = `data:image/svg+xml;base64,${btoa(`
   <circle cx="12" cy="12" r="2" fill="white" />
 </svg>`)}`;
 
-const groundStations = [
-  { lat: 47.6, lon: -122.3, name: "Seattle" },
-  { lat: 34.0, lon: -118.2, name: "Los Angeles" },
-  { lat: 40.7, lon: -74.0, name: "New York" },
-  { lat: 51.5, lon: -0.1, name: "London" },
-  { lat: 35.6, lon: 139.6, name: "Tokyo" },
-  { lat: 22.3, lon: 114.1, name: "Hong Kong" },
-  { lat: -33.8, lon: 151.2, name: "Sydney" }
-];
-
 let viewer: any = null;
 let billboardsCollection: any = null;
 let orbitPathPrimitive: any = null;
 let beamPrimitive: any = null;
 let isReady = false;
 
-// 性能优化状态
+// 性能优化：预分配内存
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
-let batchIndex = 0;
-const BATCH_COUNT = 4; // 将所有卫星分为4组，轮流更新位置
 const scratchPosition = { x: 0, y: 0, z: 0, detailed: false };
-const scratchCartesian = { x: 0, y: 0, z: 0 };
+let scratchCartesian: any = null;
 
 onMounted(() => {
   if (!containerRef.value) return;
   const Cesium = window.Cesium;
   if (!Cesium) return;
+
+  scratchCartesian = new Cesium.Cartesian3();
 
   viewer = new Cesium.Viewer(containerRef.value, {
     animation: false,
@@ -71,19 +61,34 @@ onMounted(() => {
     creditContainer: document.createElement('div'),
     shouldAnimate: !props.isPaused,
     requestRenderMode: false,
+    // 关键配置：开启对数深度缓冲，解决大尺度下的渲染伪影（蜂窝状）
+    contextOptions: {
+      webgl: {
+        alpha: false,
+        depth: true,
+        stencil: false,
+        antialias: true,
+        preserveDrawingBuffer: true,
+        failIfMajorPerformanceCaveat: false
+      }
+    },
+    orderIndependentTranslucency: true,
     imageryProvider: new Cesium.ArcGisMapServerImageryProvider({
       url: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer",
     }),
   });
 
-  viewer.clock.multiplier = props.playbackSpeed;
-  viewer.scene.globe.enableLighting = true;
+  // 场景级优化
+  viewer.scene.logarithmicDepthBuffer = true;
+  viewer.scene.globe.depthTestAgainstTerrain = false; // 严禁开启，除非有地形数据
+  viewer.scene.highDynamicRange = false;
+  viewer.scene.postProcessStages.fxaa.enabled = true;
   
-  // 重要：关闭 depthTestAgainstTerrain。
-  // 在没有加载精确地形的情况下，开启它会导致严重的深度图伪影（蜂窝状分布）。
-  viewer.scene.globe.depthTestAgainstTerrain = false;
+  viewer.clock.multiplier = props.playbackSpeed;
 
-  billboardsCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection());
+  billboardsCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection({
+    scene: viewer.scene
+  }));
   
   const orbitPolylines = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   orbitPathPrimitive = orbitPolylines.add({
@@ -99,8 +104,6 @@ onMounted(() => {
     material: Cesium.Material.fromType('PolylineGlow', { color: Cesium.Color.CYAN.withAlpha(0.4) }),
     show: false
   });
-
-  initGroundStations();
 
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   handler.setInputAction((movement: any) => {
@@ -130,31 +133,17 @@ onMounted(() => {
   updateSatellites();
 });
 
-const initGroundStations = () => {
-  const Cesium = window.Cesium;
-  const collection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
-  groundStations.forEach(gs => {
-    collection.add({
-      position: Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat),
-      pixelSize: 6,
-      color: Cesium.Color.CYAN,
-      outlineColor: Cesium.Color.WHITE,
-      outlineWidth: 1
-    });
-  });
-};
-
 const updateSatellites = () => {
   if (!isReady || !billboardsCollection) return;
+  const Cesium = window.Cesium;
   billboardsCollection.removeAll();
   props.satellites.forEach(sat => {
     billboardsCollection.add({
-      position: window.Cesium.Cartesian3.ZERO,
+      position: Cesium.Cartesian3.ZERO,
       image: SATELLITE_SVG,
       scale: 0.3,
-      color: window.Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.8),
+      color: Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.8),
       id: sat,
-      // 深度检测依然由 Cesium 自动处理（卫星进入地球背面会自动消失）
     });
   });
 };
@@ -167,40 +156,31 @@ const onTick = (clock: any) => {
   emit('tick', now);
 
   const len = billboardsCollection.length;
-  // 计算当前批次的范围
-  const batchSize = Math.ceil(len / BATCH_COUNT);
-  const start = batchIndex * batchSize;
-  const end = Math.min(start + batchSize, len);
-  
-  batchIndex = (batchIndex + 1) % BATCH_COUNT;
 
   for (let i = 0; i < len; i++) {
     const bb = billboardsCollection.get(i);
     const sat = bb.id as SatelliteInfo; 
     const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
 
-    // 如果不是当前批次且未被选中，则跳过计算（保持上一帧位置）
-    if (!isSelected && (i < start || i >= end)) continue;
-
     scratchPosition.detailed = isSelected;
     if (updateSatellitePositionResult(sat, now, scratchPosition)) {
-      // 直接修改 Cartesian3 属性，极速更新
-      bb.position.x = scratchPosition.x;
-      bb.position.y = scratchPosition.y;
-      bb.position.z = scratchPosition.z;
+      // 核心修复：必须通过 clone 赋值或直接赋值来触发 Billboard 的 Dirty Flag
+      scratchCartesian.x = scratchPosition.x;
+      scratchCartesian.y = scratchPosition.y;
+      scratchCartesian.z = scratchPosition.z;
+      
+      // 触发 Setter
+      bb.position = Cesium.Cartesian3.clone(scratchCartesian, bb.position);
       
       if (isSelected) {
         bb.color = Cesium.Color.YELLOW;
         bb.scale = 0.7;
         
-        // 更新轨道路径
         const pathPoints = getOrbitPath(sat, now);
         if (pathPoints.length > 0) {
-          const cartesianPoints = pathPoints.map(p => new Cesium.Cartesian3(p.x, p.y, p.z));
-          orbitPathPrimitive.positions = cartesianPoints;
+          orbitPathPrimitive.positions = pathPoints.map(p => new Cesium.Cartesian3(p.x, p.y, p.z));
         }
 
-        // 更新波束
         const carto = Cesium.Cartographic.fromCartesian(bb.position);
         beamPrimitive.positions = [
           bb.position, 
