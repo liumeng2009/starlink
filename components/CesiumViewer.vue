@@ -38,20 +38,12 @@ let isReady = false;
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
 let updateTicket = 0;
-const BATCH_SIZE = 8; // 每帧只更新 1/8 的非视距卫星
+const BATCH_SIZE = 4; // 适度调整批次，平衡平滑度与性能
 const scratchPosition = { x: 0, y: 0, z: 0, detailed: false };
 let scratchCartesian: any;
 let occluder: any;
 let cullingVolume: any;
 let boundingSphere: any;
-
-const groundStations = [
-  { lat: 47.6, lon: -121.5 }, { lat: 48.0, lon: -121.5 },
-  { lat: 47.2, lon: -121.5 }, { lat: 47.8, lon: -120.7 },
-  { lat: 47.4, lon: -120.7 }, { lat: 47.8, lon: -122.3 },
-  { lat: 47.4, lon: -122.3 },
-];
-let gsCartesians: any[] = [];
 
 onMounted(() => {
   if (!containerRef.value) return;
@@ -59,7 +51,7 @@ onMounted(() => {
   if (!Cesium) return;
 
   scratchCartesian = new Cesium.Cartesian3();
-  boundingSphere = new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, 1.0);
+  boundingSphere = new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, 1000.0);
 
   viewer = new Cesium.Viewer(containerRef.value, {
     animation: false,
@@ -76,7 +68,7 @@ onMounted(() => {
     navigationInstructionsInitiallyVisible: false,
     creditContainer: document.createElement('div'),
     shouldAnimate: !props.isPaused,
-    requestRenderMode: false, // 我们需要连续渲染以保持平滑
+    requestRenderMode: false,
     imageryProvider: new Cesium.ArcGisMapServerImageryProvider({
       url: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer",
     }),
@@ -84,7 +76,10 @@ onMounted(() => {
 
   viewer.clock.multiplier = props.playbackSpeed;
   viewer.scene.globe.enableLighting = true;
-  viewer.scene.highDynamicRange = false; // 禁用 HDR 提升性能
+  viewer.scene.highDynamicRange = false;
+  
+  // 关键：允许深度测试针对地形/地球表面，解决透明球问题
+  viewer.scene.globe.depthTestAgainstTerrain = true;
 
   billboardsCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection({
     scene: viewer.scene
@@ -97,18 +92,20 @@ onMounted(() => {
   const orbitPolylines = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   orbitPathPrimitive = orbitPolylines.add({
     positions: [],
-    width: 1.5,
-    material: Cesium.Material.fromType('Color', { color: Cesium.Color.YELLOW.withAlpha(0.5) })
+    width: 2.0,
+    material: Cesium.Material.fromType('Color', { color: Cesium.Color.YELLOW.withAlpha(0.7) })
   });
 
-  gsCartesians = groundStations.map(gs => Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat));
   initGroundStations();
 
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   handler.setInputAction((movement: any) => {
     const pickedObject = viewer.scene.pick(movement.position);
     if (Cesium.defined(pickedObject) && pickedObject.id) {
-      emit('satelliteClick', pickedObject.id.id);
+      // 检查选中对象是否由于遮挡而隐藏
+      if (pickedObject.primitive.show !== false) {
+        emit('satelliteClick', pickedObject.id.id);
+      }
     } else {
       emit('satelliteClick', null);
     }
@@ -153,7 +150,7 @@ const updateSatellites = () => {
       scale: 0.35,
       color: window.Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.7),
       id: sat,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY // 提升图标渲染效率
+      // 移除 disableDepthTestDistance，让地球遮挡卫星
     });
   });
 };
@@ -167,7 +164,6 @@ const onTick = (clock: any) => {
 
   dataLinksCollection.removeAll();
   
-  // 准备剔除器
   occluder = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, viewer.camera.position);
   cullingVolume = viewer.scene.frameState.cullingVolume;
 
@@ -180,18 +176,19 @@ const onTick = (clock: any) => {
     const sat = bb.id as SatelliteInfo; 
     const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
 
-    // 剔除逻辑：
-    // 1. 如果不可见且不是选中的卫星，则只在特定帧更新（降低 8 倍计算压力）
-    // 2. 如果可见，则每一帧都更新以保证平滑
-    
-    // 这里的 position 是上一次渲染的位置
     const prevPos = bb.position;
     boundingSphere.center = prevPos;
     
+    // 计算可见性
     const isOutsideFrustum = cullingVolume.computeVisibility(boundingSphere) === Cesium.Intersect.OUTSIDE;
     const isOccluded = !occluder.isPointVisible(prevPos);
-    
-    if ((isOutsideFrustum || isOccluded) && !isSelected) {
+    const isVisible = !isOutsideFrustum && !isOccluded;
+
+    // 同步 Billboard 的显示状态，防止点击到不可见的卫星
+    bb.show = isVisible || isSelected;
+
+    // 性能分片：不可见卫星每 BATCH_SIZE 帧更新一次，可见卫星每帧更新
+    if (!isVisible && !isSelected) {
         if (i % BATCH_SIZE !== step) continue;
     }
 
@@ -222,11 +219,6 @@ const onTick = (clock: any) => {
       } else {
         bb.color = Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.7);
         bb.scale = 0.35;
-      }
-
-      // 仅在可见时才处理飞线逻辑，进一步节省 CPU
-      if (!isOutsideFrustum && !isOccluded && i % 4 === 0) {
-          // 这里可以添加飞线逻辑...
       }
     }
   }
