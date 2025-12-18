@@ -20,7 +20,7 @@ const emit = defineEmits<{
 
 const containerRef = ref<HTMLDivElement | null>(null);
 
-// Cesium internals
+// Cesium 核心对象
 let viewer: any = null;
 let pointsCollection: any = null;
 let orbitPathCollection: any = null;
@@ -29,24 +29,23 @@ let groundStationsCollection: any = null;
 let dataLinksCollection: any = null;
 let isReady = false;
 
-// FPS tracking
+// 性能优化控制变量
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
+let updateTicket = 0; // 用于分帧更新的计数器
+const BATCH_COUNT = 4; // 将卫星分为4组，每帧更新一组 (大幅降低 CPU 压力)
 
-// Washington Ground Stations (Hexagonal Grid)
+// 华盛顿地面站配置
 const WA_CENTER = { lat: 47.6, lon: -121.5 };
-const HEX_RADIUS = 0.4; // degrees
 const groundStations = [
-  { lat: WA_CENTER.lat, lon: WA_CENTER.lon, name: "WA-CORE-01" },
-  { lat: WA_CENTER.lat + HEX_RADIUS, lon: WA_CENTER.lon, name: "WA-NORTH-02" },
-  { lat: WA_CENTER.lat - HEX_RADIUS, lon: WA_CENTER.lon, name: "WA-SOUTH-03" },
-  { lat: WA_CENTER.lat + HEX_RADIUS/2, lon: WA_CENTER.lon + HEX_RADIUS, name: "WA-NE-04" },
-  { lat: WA_CENTER.lat - HEX_RADIUS/2, lon: WA_CENTER.lon + HEX_RADIUS, name: "WA-SE-05" },
-  { lat: WA_CENTER.lat + HEX_RADIUS/2, lon: WA_CENTER.lon - HEX_RADIUS, name: "WA-NW-06" },
-  { lat: WA_CENTER.lat - HEX_RADIUS/2, lon: WA_CENTER.lon - HEX_RADIUS, name: "WA-SW-07" },
+  { lat: 47.6, lon: -121.5 },
+  { lat: 48.0, lon: -121.5 },
+  { lat: 47.2, lon: -121.5 },
+  { lat: 47.8, lon: -120.7 },
+  { lat: 47.4, lon: -120.7 },
+  { lat: 47.8, lon: -122.3 },
+  { lat: 47.4, lon: -122.3 },
 ];
-
-// Threshold for communication (approx meters)
 const COMM_RANGE = 600000; 
 
 onMounted(() => {
@@ -54,10 +53,6 @@ onMounted(() => {
 
   const Cesium = window.Cesium;
   if (!Cesium) return;
-
-  try {
-    Cesium.buildModuleUrl.setBaseUrl("https://unpkg.com/cesium@1.114.0/Build/Cesium/");
-  } catch (e) {}
 
   viewer = new Cesium.Viewer(containerRef.value, {
     animation: false,
@@ -85,15 +80,15 @@ onMounted(() => {
   viewer.scene.globe.enableLighting = true;
   viewer.scene.highDynamicRange = true;
   viewer.scene.backgroundColor = Cesium.Color.BLACK;
+  // 性能微调：禁用大气层等高耗能效果（如需极致性能）
+  // viewer.scene.skyAtmosphere.show = false;
 
-  // Primitive Collections
   pointsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
   orbitPathCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   beamCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   dataLinksCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
-  
-  // Custom collection for ground station markers
   groundStationsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+  
   initGroundStations();
 
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -130,22 +125,22 @@ const initGroundStations = () => {
     const pos = Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat);
     groundStationsCollection.add({
       position: pos,
-      pixelSize: 10,
-      color: Cesium.Color.CYAN.withAlpha(0.8),
+      pixelSize: 8,
+      color: Cesium.Color.CYAN.withAlpha(0.9),
       outlineColor: Cesium.Color.WHITE,
-      outlineWidth: 2,
+      outlineWidth: 1,
     });
 
-    // Add a small decorative hexagon ring
+    // 蜂窝装饰
     viewer.entities.add({
       position: pos,
       ellipse: {
-        semiMinorAxis: 15000,
-        semiMajorAxis: 15000,
-        material: Cesium.Color.CYAN.withAlpha(0.1),
+        semiMinorAxis: 20000,
+        semiMajorAxis: 20000,
+        material: Cesium.Color.CYAN.withAlpha(0.05),
         outline: true,
-        outlineColor: Cesium.Color.CYAN.withAlpha(0.5),
-        outlineWidth: 2
+        outlineColor: Cesium.Color.CYAN.withAlpha(0.3),
+        outlineWidth: 1
       }
     });
   });
@@ -158,7 +153,7 @@ const updateSatellites = () => {
   props.satellites.forEach(sat => {
     pointsCollection.add({
       position: Cesium.Cartesian3.ZERO,
-      pixelSize: 4,
+      pixelSize: 3, // 稍微缩小点，高密度下视觉更清爽
       color: Cesium.Color.fromCssColorString('#06b6d4'),
       id: sat,
     });
@@ -172,42 +167,54 @@ const onTick = (clock: any) => {
   const now = Cesium.JulianDate.toDate(clock.currentTime);
   emit('tick', now);
 
+  // 飞线更新逻辑：每帧清空，重新按需生成
   dataLinksCollection.removeAll();
-  const len = pointsCollection.length;
   
-  // Pre-calculate ground station Cartesian positions
+  const len = pointsCollection.length;
   const gsCartesians = groundStations.map(gs => Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat));
+  
+  // 分帧逻辑：计算当前帧需要处理的卫星索引范围
+  const currentBatch = updateTicket % BATCH_COUNT;
+  updateTicket++;
 
   for (let i = 0; i < len; i++) {
     const point = pointsCollection.get(i);
     const sat = point.id as SatelliteInfo; 
+    const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
+
+    // 性能核心：只有以下情况才执行 SGP4 计算：
+    // 1. 属于当前帧的处理批次
+    // 2. 是被选中的卫星 (必须保证平滑)
+    // 3. (可选) 之前在华盛顿附近的卫星可以增加更新频率
+    if (i % BATCH_COUNT !== currentBatch && !isSelected) {
+      continue; 
+    }
+
     const data = getSatellitePosition(sat, now);
-    
     if (data) {
       const position = new Cesium.Cartesian3(data.x, data.y, data.z);
       point.position = position;
       
-      // Proximity check for Washington Ground Stations
-      // To optimize: only check satellites with roughly correct longitude
+      // 飞线空间粗筛：只有在华盛顿经纬度包围盒内的才计算距离
       if (data.lon > -130 && data.lon < -110 && data.lat > 40 && data.lat < 55) {
         gsCartesians.forEach(gsPos => {
           const dist = Cesium.Cartesian3.distance(position, gsPos);
           if (dist < COMM_RANGE) {
             dataLinksCollection.add({
               positions: [position, gsPos],
-              width: 1.5,
+              width: 1.0,
               material: Cesium.Material.fromType('PolylineGlow', {
-                glowPower: 0.1,
-                color: Cesium.Color.CYAN.withAlpha(0.6)
+                glowPower: 0.05,
+                color: Cesium.Color.CYAN.withAlpha(0.4)
               })
             });
           }
         });
       }
 
-      if (props.selectedSatelliteId && sat.id === props.selectedSatelliteId) {
+      if (isSelected) {
         point.color = Cesium.Color.YELLOW;
-        point.pixelSize = 10;
+        point.pixelSize = 8;
         
         if (beamCollection.length > 0) {
           const beam = beamCollection.get(0);
@@ -218,7 +225,7 @@ const onTick = (clock: any) => {
         }
       } else {
         point.color = Cesium.Color.fromCssColorString('#06b6d4');
-        point.pixelSize = 4;
+        point.pixelSize = 3;
       }
     }
   }
@@ -239,14 +246,17 @@ watch(() => props.selectedSatelliteId, () => {
       if (pathPoints.length > 1) {
         orbitPathCollection.add({
           positions: pathPoints.map(p => new Cesium.Cartesian3(p.x, p.y, p.z)),
-          width: 2,
-          material: Cesium.Material.fromType('Color', { color: Cesium.Color.YELLOW.withAlpha(0.4) })
+          width: 1.5,
+          material: Cesium.Material.fromType('Color', { color: Cesium.Color.YELLOW.withAlpha(0.3) })
         });
       }
       beamCollection.add({
         positions: [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO],
-        width: 2,
-        material: Cesium.Material.fromType('PolylineGlow', { color: Cesium.Color.CYAN })
+        width: 1.5,
+        material: Cesium.Material.fromType('PolylineGlow', { 
+          glowPower: 0.1,
+          color: Cesium.Color.CYAN.withAlpha(0.8) 
+        })
       });
     }
   }
