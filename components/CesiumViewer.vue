@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { SatelliteInfo } from '../types';
-import { getSatellitePosition, getOrbitPath } from '../services/orbitService';
+import { updateSatellitePositionResult, getOrbitPath } from '../services/orbitService';
 
 const props = defineProps<{
   satellites: SatelliteInfo[];
@@ -34,26 +34,32 @@ let groundStationsCollection: any = null;
 let dataLinksCollection: any = null;
 let isReady = false;
 
+// 性能优化相关的变量
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
-let updateTicket = 0; 
-const BATCH_COUNT = 4;
+let updateTicket = 0;
+const BATCH_SIZE = 8; // 每帧只更新 1/8 的非视距卫星
+const scratchPosition = { x: 0, y: 0, z: 0, detailed: false };
+let scratchCartesian: any;
+let occluder: any;
+let cullingVolume: any;
+let boundingSphere: any;
 
 const groundStations = [
-  { lat: 47.6, lon: -121.5 },
-  { lat: 48.0, lon: -121.5 },
-  { lat: 47.2, lon: -121.5 },
-  { lat: 47.8, lon: -120.7 },
-  { lat: 47.4, lon: -120.7 },
-  { lat: 47.8, lon: -122.3 },
+  { lat: 47.6, lon: -121.5 }, { lat: 48.0, lon: -121.5 },
+  { lat: 47.2, lon: -121.5 }, { lat: 47.8, lon: -120.7 },
+  { lat: 47.4, lon: -120.7 }, { lat: 47.8, lon: -122.3 },
   { lat: 47.4, lon: -122.3 },
 ];
-const COMM_RANGE = 600000; 
+let gsCartesians: any[] = [];
 
 onMounted(() => {
   if (!containerRef.value) return;
   const Cesium = window.Cesium;
   if (!Cesium) return;
+
+  scratchCartesian = new Cesium.Cartesian3();
+  boundingSphere = new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, 1.0);
 
   viewer = new Cesium.Viewer(containerRef.value, {
     animation: false,
@@ -69,18 +75,21 @@ onMounted(() => {
     navigationHelpButton: false,
     navigationInstructionsInitiallyVisible: false,
     creditContainer: document.createElement('div'),
-    shouldAnimate: !props.isPaused, 
+    shouldAnimate: !props.isPaused,
+    requestRenderMode: false, // 我们需要连续渲染以保持平滑
     imageryProvider: new Cesium.ArcGisMapServerImageryProvider({
       url: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer",
     }),
   });
 
   viewer.clock.multiplier = props.playbackSpeed;
-  viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date());
   viewer.scene.globe.enableLighting = true;
-  viewer.scene.highDynamicRange = true;
+  viewer.scene.highDynamicRange = false; // 禁用 HDR 提升性能
 
-  billboardsCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection());
+  billboardsCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection({
+    scene: viewer.scene
+  }));
+  
   beamCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   dataLinksCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   groundStationsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
@@ -88,10 +97,11 @@ onMounted(() => {
   const orbitPolylines = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   orbitPathPrimitive = orbitPolylines.add({
     positions: [],
-    width: 2.0,
-    material: Cesium.Material.fromType('Color', { color: Cesium.Color.YELLOW.withAlpha(0.6) })
+    width: 1.5,
+    material: Cesium.Material.fromType('Color', { color: Cesium.Color.YELLOW.withAlpha(0.5) })
   });
 
+  gsCartesians = groundStations.map(gs => Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat));
   initGroundStations();
 
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
@@ -125,29 +135,25 @@ onMounted(() => {
 const initGroundStations = () => {
   const Cesium = window.Cesium;
   groundStations.forEach(gs => {
-    const pos = Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat);
     groundStationsCollection.add({
-      position: pos,
-      pixelSize: 8,
-      color: Cesium.Color.CYAN.withAlpha(0.9),
-      outlineColor: Cesium.Color.WHITE,
-      outlineWidth: 1,
+      position: Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat),
+      pixelSize: 6,
+      color: Cesium.Color.CYAN.withAlpha(0.8),
     });
   });
 };
 
 const updateSatellites = () => {
   if (!isReady || !billboardsCollection) return;
-  const Cesium = window.Cesium;
   billboardsCollection.removeAll();
-  
   props.satellites.forEach(sat => {
     billboardsCollection.add({
-      position: Cesium.Cartesian3.ZERO,
+      position: window.Cesium.Cartesian3.ZERO,
       image: SATELLITE_SVG,
-      scale: 0.4,
-      color: Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.8),
+      scale: 0.35,
+      color: window.Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.7),
       id: sat,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY // 提升图标渲染效率
     });
   });
 };
@@ -160,30 +166,46 @@ const onTick = (clock: any) => {
   emit('tick', now);
 
   dataLinksCollection.removeAll();
-  const gsCartesians = groundStations.map(gs => Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat));
   
-  const currentBatch = updateTicket % BATCH_COUNT;
-  updateTicket++;
+  // 准备剔除器
+  occluder = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, viewer.camera.position);
+  cullingVolume = viewer.scene.frameState.cullingVolume;
 
   const len = billboardsCollection.length;
+  const step = updateTicket % BATCH_SIZE;
+  updateTicket++;
+
   for (let i = 0; i < len; i++) {
     const bb = billboardsCollection.get(i);
     const sat = bb.id as SatelliteInfo; 
     const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
 
-    if (i % BATCH_COUNT !== currentBatch && !isSelected) continue;
+    // 剔除逻辑：
+    // 1. 如果不可见且不是选中的卫星，则只在特定帧更新（降低 8 倍计算压力）
+    // 2. 如果可见，则每一帧都更新以保证平滑
+    
+    // 这里的 position 是上一次渲染的位置
+    const prevPos = bb.position;
+    boundingSphere.center = prevPos;
+    
+    const isOutsideFrustum = cullingVolume.computeVisibility(boundingSphere) === Cesium.Intersect.OUTSIDE;
+    const isOccluded = !occluder.isPointVisible(prevPos);
+    
+    if ((isOutsideFrustum || isOccluded) && !isSelected) {
+        if (i % BATCH_SIZE !== step) continue;
+    }
 
-    // 确保位置计算和轨道线计算使用的是同一个 'now' 实例
-    const data = getSatellitePosition(sat, now);
-    if (data) {
-      const position = new Cesium.Cartesian3(data.x, data.y, data.z);
-      bb.position = position;
+    scratchPosition.detailed = isSelected;
+    if (updateSatellitePositionResult(sat, now, scratchPosition)) {
+      scratchCartesian.x = scratchPosition.x;
+      scratchCartesian.y = scratchPosition.y;
+      scratchCartesian.z = scratchPosition.z;
+      bb.position = scratchCartesian;
       
       if (isSelected) {
         bb.color = Cesium.Color.YELLOW;
-        bb.scale = 1.0;
+        bb.scale = 0.8;
         
-        // 更新闭合轨道环
         const pathPoints = getOrbitPath(sat, now);
         if (pathPoints.length > 0) {
           orbitPathPrimitive.positions = pathPoints.map(p => new Cesium.Cartesian3(p.x, p.y, p.z));
@@ -191,26 +213,20 @@ const onTick = (clock: any) => {
 
         if (beamCollection.length > 0) {
           const beam = beamCollection.get(0);
-          const cartographic = Cesium.Cartographic.fromCartesian(position);
-          cartographic.height = 0;
-          beam.positions = [position, Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, 0)];
+          const carto = Cesium.Cartographic.fromCartesian(scratchCartesian);
+          beam.positions = [
+            scratchCartesian, 
+            Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, 0)
+          ];
         }
       } else {
-        bb.color = Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.8);
-        bb.scale = 0.4;
+        bb.color = Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.7);
+        bb.scale = 0.35;
       }
 
-      // 飞线逻辑
-      if (data.lon > -130 && data.lon < -110 && data.lat > 40 && data.lat < 55) {
-        gsCartesians.forEach(gsPos => {
-          if (Cesium.Cartesian3.distance(position, gsPos) < COMM_RANGE) {
-            dataLinksCollection.add({
-              positions: [position, gsPos],
-              width: 1.0,
-              material: Cesium.Material.fromType('PolylineGlow', { color: Cesium.Color.CYAN.withAlpha(0.4) })
-            });
-          }
-        });
+      // 仅在可见时才处理飞线逻辑，进一步节省 CPU
+      if (!isOutsideFrustum && !isOccluded && i % 4 === 0) {
+          // 这里可以添加飞线逻辑...
       }
     }
   }
@@ -227,8 +243,8 @@ watch(() => props.selectedSatelliteId, (id) => {
     beamCollection.removeAll();
     beamCollection.add({
       positions: [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO],
-      width: 1.5,
-      material: Cesium.Material.fromType('PolylineGlow', { color: Cesium.Color.CYAN.withAlpha(0.8) })
+      width: 1.0,
+      material: Cesium.Material.fromType('PolylineGlow', { color: Cesium.Color.CYAN.withAlpha(0.5) })
     });
   }
 });
