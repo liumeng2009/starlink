@@ -20,6 +20,7 @@ const emit = defineEmits<{
 
 const containerRef = ref<HTMLDivElement | null>(null);
 
+// 卫星 SVG 图标
 const SATELLITE_SVG = `data:image/svg+xml;base64,${btoa(`
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
   <path d="M7 9L2 14L5 17L10 12M12 10L17 5L20 8L15 13M9 22L12 19M19 12L22 9M12 12L15 15M13 11L14 10M11 13L10 14" />
@@ -28,7 +29,7 @@ const SATELLITE_SVG = `data:image/svg+xml;base64,${btoa(`
 
 let viewer: any = null;
 let billboardsCollection: any = null;
-let orbitPathPrimitive: any = null; // 修改为单个 Primitive 以便频繁更新
+let orbitPathPrimitive: any = null;
 let beamCollection: any = null;
 let groundStationsCollection: any = null;
 let dataLinksCollection: any = null;
@@ -37,7 +38,7 @@ let isReady = false;
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
 let updateTicket = 0; 
-const BATCH_COUNT = 4;
+const BATCH_COUNT = 4; // 分 4 组更新以提升性能
 
 const groundStations = [
   { lat: 47.6, lon: -121.5 },
@@ -80,13 +81,14 @@ onMounted(() => {
   viewer.scene.globe.enableLighting = true;
   viewer.scene.highDynamicRange = true;
 
+  // 初始化集合
   billboardsCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection());
   beamCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   dataLinksCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   groundStationsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
   
-  // 专门为选中的轨道路径创建一个 Polyline
-  orbitPathPrimitive = viewer.scene.primitives.add(new Cesium.PolylineCollection()).add({
+  const orbitPolylines = viewer.scene.primitives.add(new Cesium.PolylineCollection());
+  orbitPathPrimitive = orbitPolylines.add({
     positions: [],
     width: 2.0,
     material: Cesium.Material.fromType('Color', { color: Cesium.Color.YELLOW.withAlpha(0.4) })
@@ -119,7 +121,9 @@ onMounted(() => {
   requestAnimationFrame(fpsLoop);
 
   isReady = true;
-  updateSatellites();
+  if (props.satellites.length > 0) {
+    updateSatellites();
+  }
 });
 
 const initGroundStations = () => {
@@ -137,9 +141,10 @@ const initGroundStations = () => {
 };
 
 const updateSatellites = () => {
-  if (!isReady || !props.satellites.length) return;
+  if (!isReady || !billboardsCollection) return;
   const Cesium = window.Cesium;
   billboardsCollection.removeAll();
+  
   props.satellites.forEach(sat => {
     billboardsCollection.add({
       position: Cesium.Cartesian3.ZERO,
@@ -160,15 +165,19 @@ const onTick = (clock: any) => {
 
   dataLinksCollection.removeAll();
   const gsCartesians = groundStations.map(gs => Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat));
+  
   const currentBatch = updateTicket % BATCH_COUNT;
   updateTicket++;
 
+  // 关键修复：正确获取集合长度，不要使用外部的 len 变量
+  const len = billboardsCollection.length;
+  
   for (let i = 0; i < len; i++) {
     const bb = billboardsCollection.get(i);
     const sat = bb.id as SatelliteInfo; 
     const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
 
-    // 分帧更新，但选中卫星必须每帧处理
+    // 性能优化：分帧更新，但选中的卫星每帧必更
     if (i % BATCH_COUNT !== currentBatch && !isSelected) continue;
 
     const data = getSatellitePosition(sat, now);
@@ -180,8 +189,7 @@ const onTick = (clock: any) => {
         bb.color = Cesium.Color.YELLOW;
         bb.scale = 1.0;
         
-        // 核心修正：每帧实时重新计算轨道预测路径
-        // 这确保了即使在 600x 速度下，路径也会随时间轴平滑移动且卫星始终在路径起点
+        // 实时更新轨道路径，确保重合
         const pathPoints = getOrbitPath(sat, now);
         if (pathPoints.length > 0) {
           orbitPathPrimitive.positions = pathPoints.map(p => new Cesium.Cartesian3(p.x, p.y, p.z));
@@ -198,7 +206,7 @@ const onTick = (clock: any) => {
         bb.scale = 0.4;
       }
 
-      // 飞线逻辑
+      // 飞线粗筛
       if (data.lon > -130 && data.lon < -110 && data.lat > 40 && data.lat < 55) {
         gsCartesians.forEach(gsPos => {
           if (Cesium.Cartesian3.distance(position, gsPos) < COMM_RANGE) {
@@ -214,7 +222,6 @@ const onTick = (clock: any) => {
   }
 };
 
-const len = 0; // 这里的 len 需要被赋值，修正逻辑中的引用
 watch(() => props.satellites, updateSatellites);
 watch(() => props.selectedSatelliteId, (id) => {
   if (!isReady) return;
@@ -222,7 +229,6 @@ watch(() => props.selectedSatelliteId, (id) => {
     orbitPathPrimitive.positions = [];
     beamCollection.removeAll();
   } else {
-    // 选中时初始化 beam
     const Cesium = window.Cesium;
     beamCollection.removeAll();
     beamCollection.add({
