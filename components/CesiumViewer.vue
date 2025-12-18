@@ -26,6 +26,17 @@ const SATELLITE_SVG = `data:image/svg+xml;base64,${btoa(`
   <circle cx="12" cy="12" r="2" fill="white" />
 </svg>`)}`;
 
+// 定义缺失的地面站数据
+const groundStations = [
+  { lat: 47.6, lon: -122.3, name: "Seattle" },
+  { lat: 34.0, lon: -118.2, name: "Los Angeles" },
+  { lat: 40.7, lon: -74.0, name: "New York" },
+  { lat: 51.5, lon: -0.1, name: "London" },
+  { lat: 35.6, lon: 139.6, name: "Tokyo" },
+  { lat: 22.3, lon: 114.1, name: "Hong Kong" },
+  { lat: -33.8, lon: 151.2, name: "Sydney" }
+];
+
 let viewer: any = null;
 let billboardsCollection: any = null;
 let orbitPathPrimitive: any = null;
@@ -38,7 +49,7 @@ let isReady = false;
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
 let updateTicket = 0;
-const BATCH_SIZE = 4; // 适度调整批次，平衡平滑度与性能
+const BATCH_SIZE = 4; // 适度调整批次
 const scratchPosition = { x: 0, y: 0, z: 0, detailed: false };
 let scratchCartesian: any;
 let occluder: any;
@@ -51,6 +62,7 @@ onMounted(() => {
   if (!Cesium) return;
 
   scratchCartesian = new Cesium.Cartesian3();
+  // 卫星的大致包围球
   boundingSphere = new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, 1000.0);
 
   viewer = new Cesium.Viewer(containerRef.value, {
@@ -78,7 +90,7 @@ onMounted(() => {
   viewer.scene.globe.enableLighting = true;
   viewer.scene.highDynamicRange = false;
   
-  // 关键：允许深度测试针对地形/地球表面，解决透明球问题
+  // 核心修复：启用深度检测，解决地球透明问题，让地球能遮挡卫星
   viewer.scene.globe.depthTestAgainstTerrain = true;
 
   billboardsCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection({
@@ -102,7 +114,7 @@ onMounted(() => {
   handler.setInputAction((movement: any) => {
     const pickedObject = viewer.scene.pick(movement.position);
     if (Cesium.defined(pickedObject) && pickedObject.id) {
-      // 检查选中对象是否由于遮挡而隐藏
+      // 只有当前可见（未被剔除）的对象才能被选中
       if (pickedObject.primitive.show !== false) {
         emit('satelliteClick', pickedObject.id.id);
       }
@@ -134,8 +146,10 @@ const initGroundStations = () => {
   groundStations.forEach(gs => {
     groundStationsCollection.add({
       position: Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat),
-      pixelSize: 6,
-      color: Cesium.Color.CYAN.withAlpha(0.8),
+      pixelSize: 8,
+      color: Cesium.Color.CYAN,
+      outlineColor: Cesium.Color.WHITE,
+      outlineWidth: 2
     });
   });
 };
@@ -150,7 +164,7 @@ const updateSatellites = () => {
       scale: 0.35,
       color: window.Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.7),
       id: sat,
-      // 移除 disableDepthTestDistance，让地球遮挡卫星
+      // 确保这里没有设置 disableDepthTestDistance
     });
   });
 };
@@ -164,6 +178,7 @@ const onTick = (clock: any) => {
 
   dataLinksCollection.removeAll();
   
+  // 更新遮挡器和视锥体
   occluder = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, viewer.camera.position);
   cullingVolume = viewer.scene.frameState.cullingVolume;
 
@@ -184,10 +199,11 @@ const onTick = (clock: any) => {
     const isOccluded = !occluder.isPointVisible(prevPos);
     const isVisible = !isOutsideFrustum && !isOccluded;
 
-    // 同步 Billboard 的显示状态，防止点击到不可见的卫星
+    // 同步显示状态：不可见且非选中的卫星，直接隐藏
+    // 这解决了选中背面卫星的问题
     bb.show = isVisible || isSelected;
 
-    // 性能分片：不可见卫星每 BATCH_SIZE 帧更新一次，可见卫星每帧更新
+    // 性能分片：不可见卫星降低更新频率
     if (!isVisible && !isSelected) {
         if (i % BATCH_SIZE !== step) continue;
     }
