@@ -91,8 +91,8 @@ export const getOrbitPath = (sat: SatelliteInfo, startTime: Date) => {
   const gmstFixed = satellite.gstime(startTime);
 
   // 3. Generate points
-  // 180 segments provides good resolution for a circle/ellipse
-  const segments = 180; 
+  // 360 segments for smoother circle
+  const segments = 360; 
   
   for (let i = 0; i <= segments; i++) {
     // Calculate time offset for this segment
@@ -118,5 +118,96 @@ export const getOrbitPath = (sat: SatelliteInfo, startTime: Date) => {
     });
   }
 
+  // 4. Smooth Loop Closure
+  // Due to orbital perturbations (J2 etc), the satellite doesn't return to the exact same 
+  // inertial position after one period. We distribute this "gap" error across the path
+  // to create a visually perfect closed loop.
+  if (positions.length > 1) {
+    const first = positions[0];
+    const last = positions[positions.length - 1];
+    
+    const gap = {
+      x: last.x - first.x,
+      y: last.y - first.y,
+      z: last.z - first.z
+    };
+
+    // Adjust all points except the first one (which is the anchor)
+    // The last point will be adjusted by exactly -gap, making it equal to first point.
+    for (let i = 1; i < positions.length; i++) {
+      const weight = i / (positions.length - 1);
+      positions[i].x -= gap.x * weight;
+      positions[i].y -= gap.y * weight;
+      positions[i].z -= gap.z * weight;
+    }
+  }
+
+  return positions;
+};
+
+/**
+ * Pre-calculates the orbit path in ECI (Inertial) coordinates.
+ * This is expensive (SGP4 propagation) and should be done once when satellite is selected.
+ */
+export const getOrbitPathECI = (sat: SatelliteInfo, startTime: Date) => {
+  if (!satellite) return [];
+
+  let periodMinutes = 96;
+  const meanMotion = sat.satrec.no; 
+  if (meanMotion && meanMotion > 0) {
+    periodMinutes = (2 * Math.PI) / meanMotion;
+  }
+
+  const eciPoints: any[] = [];
+  const startMs = startTime.getTime();
+  const segments = 360; 
+  
+  for (let i = 0; i <= segments; i++) {
+    const fraction = i / segments;
+    const timeOffsetMinutes = fraction * periodMinutes;
+    const date = new Date(startMs + timeOffsetMinutes * 60 * 1000);
+    const positionAndVelocity = satellite.propagate(sat.satrec, date);
+    const positionEci = positionAndVelocity.position;
+
+    if (!positionEci || typeof positionEci !== 'object') continue;
+    eciPoints.push(positionEci);
+  }
+
+  // Smooth Loop Closure in ECI
+  if (eciPoints.length > 1) {
+    const first = eciPoints[0];
+    const last = eciPoints[eciPoints.length - 1];
+    const gap = { x: last.x - first.x, y: last.y - first.y, z: last.z - first.z };
+
+    for (let i = 1; i < eciPoints.length; i++) {
+      const weight = i / (eciPoints.length - 1);
+      eciPoints[i].x -= gap.x * weight;
+      eciPoints[i].y -= gap.y * weight;
+      eciPoints[i].z -= gap.z * weight;
+    }
+  }
+
+  return eciPoints;
+};
+
+/**
+ * Efficiently transforms cached ECI points to ECF for the current frame time.
+ * This avoids re-running SGP4 propagation.
+ */
+export const getOrbitPathECF = (eciPoints: any[], currentTime: Date) => {
+  if (!satellite || !eciPoints.length) return [];
+  
+  const gmst = satellite.gstime(currentTime);
+  const positions: {x: number, y: number, z: number}[] = [];
+
+  for (let i = 0; i < eciPoints.length; i++) {
+    const eci = eciPoints[i];
+    const ecf = satellite.eciToEcf(eci, gmst);
+    positions.push({
+      x: ecf.x * 1000,
+      y: ecf.y * 1000,
+      z: ecf.z * 1000
+    });
+  }
   return positions;
 };

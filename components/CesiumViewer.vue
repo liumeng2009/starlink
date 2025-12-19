@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { SatelliteInfo } from '../types';
-import { getSatellitePosition, getOrbitPath } from '../services/orbitService';
+import { getSatellitePosition, getOrbitPathECI, getOrbitPathECF } from '../services/orbitService';
 
 const props = defineProps<{
   satellites: SatelliteInfo[];
@@ -24,6 +24,8 @@ const containerRef = ref<HTMLDivElement | null>(null);
 let viewer: any = null;
 let pointsCollection: any = null;
 let orbitPathCollection: any = null;
+let activeOrbitPolyline: any = null;
+let cachedOrbitECI: any[] = []; // 缓存 ECI 轨道点
 let beamCollection: any = null;
 let groundStationsCollection: any = null;
 let dataLinksCollection: any = null;
@@ -33,7 +35,7 @@ let isReady = false;
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
 let updateTicket = 0; // 用于分帧更新的计数器
-const BATCH_COUNT = 4; // 将卫星分为4组，每帧更新一组 (大幅降低 CPU 压力)
+const BATCH_COUNT = 32; // 将卫星分为4组，每帧更新一组 (大幅降低 CPU 压力)
 
 // 预分配临时对象，避免 GC
 let scratchCartesian: any = null;
@@ -286,6 +288,11 @@ const onTick = (clock: any) => {
       }
     }
   }
+
+  if (activeOrbitPolyline && props.selectedSatelliteId && cachedOrbitECI.length > 0) {
+    const pathPoints = getOrbitPathECF(cachedOrbitECI, now);
+    activeOrbitPolyline.positions = pathPoints.map(p => new Cesium.Cartesian3(p.x, p.y, p.z));
+  }
 };
 
 watch(() => props.satellites, updateSatellites);
@@ -293,15 +300,20 @@ watch(() => props.selectedSatelliteId, () => {
   if (!isReady) return;
   const Cesium = window.Cesium;
   orbitPathCollection.removeAll();
+  activeOrbitPolyline = null;
   beamCollection.removeAll();
+  cachedOrbitECI = [];
 
   if (props.selectedSatelliteId) {
     const sat = props.satellites.find(s => s.id === props.selectedSatelliteId);
     if (sat) {
       const now = Cesium.JulianDate.toDate(viewer.clock.currentTime);
-      const pathPoints = getOrbitPath(sat, now);
+      // 仅计算一次昂贵的 SGP4 传播
+      cachedOrbitECI = getOrbitPathECI(sat, now);
+      const pathPoints = getOrbitPathECF(cachedOrbitECI, now);
+      
       if (pathPoints.length > 1) {
-        orbitPathCollection.add({
+        activeOrbitPolyline = orbitPathCollection.add({
           positions: pathPoints.map(p => new Cesium.Cartesian3(p.x, p.y, p.z)),
           width: 1.5,
           material: Cesium.Material.fromType('Color', { color: Cesium.Color.YELLOW.withAlpha(0.3) })
