@@ -21,11 +21,8 @@ const emit = defineEmits<{
 
 const containerRef = ref<HTMLDivElement | null>(null);
 
-const SATELLITE_SVG = `data:image/svg+xml;base64,${btoa(`
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M7 9L2 14L5 17L10 12M12 10L17 5L20 8L15 13M9 22L12 19M19 12L22 9M12 12L15 15M13 11L14 10M11 13L10 14" />
-  <circle cx="12" cy="12" r="2" fill="white" />
-</svg>`)}`;
+// 使用 16x16 的高密度发光圆点 PNG，比 SVG 渲染开销更低
+const SATELLITE_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAABX0lEQVQ4y52TzStEURiHn/fOnSgzY6IsmIWFshA7Y6GkhmIhK8ofYGFp9idYyVpYmY2FlZKVpZKVmY0pS8mS8id478W5Y86979yZon6773nPeXqep6OIsizLpAnYAs7LsjzLshwwD7wAnX/G7ALXQB6YAtKAnmXZTid8A66Asf8K6IuK9ALNfwX0VpXpB7p/D9AA3I3C/fH6H6X9E6AbGAf6Y0ArMAZUA0vAFXAJ3AD7wCHwAnS0AnvAGS6fS6AWGIn9i7S3A6m6WAtYArZiaX9F2vPAO7CPV1W6GpgAdpE2A/S0A7vAAnAA9ALN8XsW6AnAm0hbA3ba6HqA89i8S3uXf9Iu7U369Xre9B05pC6f0v8G5IHGKLALXOKfLp/S/uV380uS0hA6v0O7y1XG83LofAOdI8A87l96oEuk9Mv67GId6G7GfG36XpB96vIBD0idrI9L5XMAAAAASUVORK5CYII=';
 
 let viewer: any = null;
 let billboardsCollection: any = null;
@@ -33,7 +30,7 @@ let orbitPathPrimitive: any = null;
 let beamPrimitive: any = null;
 let isReady = false;
 
-// Pre-allocated scratch objects to minimize GC
+// 预分配对象以减少 GC
 let scratchCartesian: any = null;
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
@@ -65,15 +62,12 @@ onMounted(() => {
     }),
   });
 
-  // VISUAL ARTIFACT FIXES:
-  // 1. Enable logarithmic depth buffer to fix Z-fighting (honeycomb/flickering) in high orbit.
-  viewer.scene.logarithmicDepthBuffer = true;
-  // 2. Disable depth testing against terrain to prevent beehive-like patterns on the globe.
-  viewer.scene.globe.depthTestAgainstTerrain = false;
+  // 渲染质量与性能优化
+  viewer.scene.logarithmicDepthBuffer = true; // 修复高空深度冲突导致的蜂窝伪影
+  viewer.scene.globe.depthTestAgainstTerrain = false; // 关闭地形深度测试，防止地表网格纹理错误
+  viewer.scene.highDynamicRange = false;
+  viewer.scene.postProcessStages.fxaa.enabled = false; // 如果追求极致 FPS，可关闭抗锯齿
   
-  // PERFORMANCE FIXES:
-  viewer.scene.highDynamicRange = false; 
-  viewer.scene.postProcessStages.fxaa.enabled = true;
   viewer.clock.multiplier = props.playbackSpeed;
 
   billboardsCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection({
@@ -131,9 +125,9 @@ const updateSatellites = () => {
   props.satellites.forEach(sat => {
     billboardsCollection.add({
       position: Cesium.Cartesian3.ZERO,
-      image: SATELLITE_SVG,
-      scale: 0.35,
-      color: Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.8),
+      image: SATELLITE_IMAGE, // 使用 PNG
+      scale: 0.8, // PNG 基础尺寸小，适当调大缩放
+      color: Cesium.Color.WHITE.withAlpha(0.9), // 图片自带颜色时用白色叠加，或者用 Tint
       id: sat,
     });
   });
@@ -153,18 +147,19 @@ const onTick = (clock: any) => {
     const sat = bb.id as SatelliteInfo; 
     const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
 
-    // Direct synchronous update for 500 satellites (extremely fast on modern CPUs)
     const data = getSatellitePosition(sat, now);
     if (data) {
-      // Fix: Must use clone() or re-assignment of the full Cartesian3 to trigger Cesium's internal update flags
+      // 核心：同步更新坐标
       scratchCartesian.x = data.x;
       scratchCartesian.y = data.y;
       scratchCartesian.z = data.z;
+      
+      // 使用 clone 确保触发 Cesium 的内部 Setter 以更新渲染
       bb.position = Cesium.Cartesian3.clone(scratchCartesian, bb.position);
       
       if (isSelected) {
         bb.color = Cesium.Color.YELLOW;
-        bb.scale = 0.8;
+        bb.scale = 1.2;
         
         const pathPoints = getOrbitPath(sat, now);
         if (pathPoints.length > 0) {
@@ -178,8 +173,9 @@ const onTick = (clock: any) => {
         ];
         beamPrimitive.show = true;
       } else {
-        bb.color = Cesium.Color.fromCssColorString('#06b6d4').withAlpha(0.8);
-        bb.scale = 0.35;
+        // 恢复默认颜色和缩放
+        bb.color = Cesium.Color.WHITE.withAlpha(0.9);
+        bb.scale = 0.8;
       }
     }
   }
