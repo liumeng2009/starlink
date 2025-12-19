@@ -63,32 +63,6 @@ const groundStations = [
 ];
 const COMM_RANGE = 600000; 
 
-// 生成简单的卫星图标 (白色圆点带发光)
-const createSatelliteImage = () => {
-  const canvas = document.createElement('canvas');
-  canvas.width = 32;
-  canvas.height = 32;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return canvas;
-
-  // 绘制发光
-  const gradient = ctx.createRadialGradient(16, 16, 2, 16, 16, 16);
-  gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-  gradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.8)');
-  gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-  
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, 32, 32);
-  
-  // 绘制核心
-  ctx.beginPath();
-  ctx.arc(16, 16, 4, 0, Math.PI * 2);
-  ctx.fillStyle = 'white';
-  ctx.fill();
-
-  return canvas;
-};
-
 onMounted(() => {
   if (!containerRef.value) return;
 
@@ -96,7 +70,8 @@ onMounted(() => {
   if (!Cesium) return;
 
   scratchCartesian = new Cesium.Cartesian3();
-  satelliteImage = createSatelliteImage();
+  // 使用 public 目录下的图片
+  satelliteImage = 'satellite.png';
 
   viewer = new Cesium.Viewer(containerRef.value, {
     animation: false,
@@ -245,8 +220,8 @@ const updateSatellites = () => {
     billboardCollection.add({
       position: Cesium.Cartesian3.ZERO,
       image: satelliteImage,
-      scale: 0.5, // 默认缩小一点
-      color: Cesium.Color.fromCssColorString('#06b6d4'),
+      scale: 0.1, // 图片可能比较大，默认缩小到 0.1
+      color: Cesium.Color.WHITE, // 使用图片原色，或者根据需要染色
       id: sat,
     });
   });
@@ -306,11 +281,11 @@ const onTick = (clock: any) => {
 
         // 更新样式 (仅在 SGP4 更新时处理，减少开销)
         if (isSelected) {
-          billboard.color = Cesium.Color.YELLOW;
-          billboard.scale = 1.5; // 选中放大
+          billboard.color = Cesium.Color.YELLOW; // 选中时染成黄色
+          billboard.scale = 0.3; // 选中放大 (0.1 -> 0.3)
         } else {
-          billboard.color = Cesium.Color.fromCssColorString('#06b6d4');
-          billboard.scale = 0.5; // 默认大小
+          billboard.color = Cesium.Color.WHITE; // 未选中显示原色 (或白色)
+          billboard.scale = 0.1; // 默认大小
         }
       }
     } else if (shouldInterpUpdate) {
