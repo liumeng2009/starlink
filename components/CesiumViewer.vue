@@ -22,7 +22,7 @@ const containerRef = ref<HTMLDivElement | null>(null);
 
 // Cesium 核心对象
 let viewer: any = null;
-let pointsCollection: any = null;
+let billboardCollection: any = null;
 let orbitPathCollection: any = null;
 let activeOrbitPolyline: any = null;
 let cachedOrbitECI: any[] = []; // 缓存 ECI 轨道点
@@ -30,6 +30,7 @@ let beamCollection: any = null;
 let groundStationsCollection: any = null;
 let dataLinksCollection: any = null;
 let isReady = false;
+let satelliteImage: any = null; // 缓存生成的卫星图片
 
 // 卫星运动状态缓存
 // Key: satellite ID, Value: { x, y, z, vx, vy, vz, updateTime }
@@ -62,6 +63,32 @@ const groundStations = [
 ];
 const COMM_RANGE = 600000; 
 
+// 生成简单的卫星图标 (白色圆点带发光)
+const createSatelliteImage = () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return canvas;
+
+  // 绘制发光
+  const gradient = ctx.createRadialGradient(16, 16, 2, 16, 16, 16);
+  gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+  gradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.8)');
+  gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 32, 32);
+  
+  // 绘制核心
+  ctx.beginPath();
+  ctx.arc(16, 16, 4, 0, Math.PI * 2);
+  ctx.fillStyle = 'white';
+  ctx.fill();
+
+  return canvas;
+};
+
 onMounted(() => {
   if (!containerRef.value) return;
 
@@ -69,6 +96,7 @@ onMounted(() => {
   if (!Cesium) return;
 
   scratchCartesian = new Cesium.Cartesian3();
+  satelliteImage = createSatelliteImage();
 
   viewer = new Cesium.Viewer(containerRef.value, {
     animation: false,
@@ -139,7 +167,7 @@ onMounted(() => {
   viewer.clock.multiplier = props.playbackSpeed;
   viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date());
 
-  pointsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+  billboardCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection());
   orbitPathCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   beamCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   dataLinksCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
@@ -211,12 +239,13 @@ const initGroundStations = () => {
 const updateSatellites = () => {
   if (!isReady || !props.satellites.length) return;
   const Cesium = window.Cesium;
-  pointsCollection.removeAll();
+  billboardCollection.removeAll();
   satelliteMotionCache.clear();
   props.satellites.forEach(sat => {
-    pointsCollection.add({
+    billboardCollection.add({
       position: Cesium.Cartesian3.ZERO,
-      pixelSize: 3, // 稍微缩小点，高密度下视觉更清爽
+      image: satelliteImage,
+      scale: 0.5, // 默认缩小一点
       color: Cesium.Color.fromCssColorString('#06b6d4'),
       id: sat,
     });
@@ -224,7 +253,7 @@ const updateSatellites = () => {
 };
 
 const onTick = (clock: any) => {
-  if (!pointsCollection || !isReady) return;
+  if (!billboardCollection || !isReady) return;
   
   const Cesium = window.Cesium;
   const now = Cesium.JulianDate.toDate(clock.currentTime);
@@ -233,7 +262,7 @@ const onTick = (clock: any) => {
   // 飞线更新逻辑：每帧清空，重新按需生成
   dataLinksCollection.removeAll();
   
-  const len = pointsCollection.length;
+  const len = billboardCollection.length;
   const gsCartesians = groundStations.map(gs => Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat));
   
   // 分帧逻辑：计算当前帧需要处理的卫星索引范围
@@ -245,8 +274,8 @@ const onTick = (clock: any) => {
   const cameraPos = viewer.camera.position;
   
   for (let i = 0; i < len; i++) {
-    const point = pointsCollection.get(i);
-    const sat = point.id as SatelliteInfo; 
+    const billboard = billboardCollection.get(i);
+    const sat = billboard.id as SatelliteInfo; 
     const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
 
     // 性能核心：只有以下情况才执行 SGP4 计算：
@@ -277,11 +306,11 @@ const onTick = (clock: any) => {
 
         // 更新样式 (仅在 SGP4 更新时处理，减少开销)
         if (isSelected) {
-          point.color = Cesium.Color.YELLOW;
-          point.pixelSize = 8;
+          billboard.color = Cesium.Color.YELLOW;
+          billboard.scale = 1.5; // 选中放大
         } else {
-          point.color = Cesium.Color.fromCssColorString('#06b6d4');
-          point.pixelSize = 3;
+          billboard.color = Cesium.Color.fromCssColorString('#06b6d4');
+          billboard.scale = 0.5; // 默认大小
         }
       }
     } else if (shouldInterpUpdate) {
@@ -333,7 +362,7 @@ const onTick = (clock: any) => {
       }
       */
       
-      point.position = scratchCartesian; 
+      billboard.position = scratchCartesian; 
       
       // 飞线空间粗筛：只有在华盛顿经纬度包围盒内的才计算距离
       /*
