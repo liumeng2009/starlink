@@ -27,6 +27,7 @@ export const fetchStarlinkTLEs = async (): Promise<TLEData[]> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
 
+    // 星历接口
     const response = await fetch('https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle', {
       signal: controller.signal
     });

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { SatelliteInfo } from '../types';
-import { getSatellitePosition, getOrbitPathECI, getOrbitPathECF } from '../services/orbitService';
+import { getSatellitePosition, getOrbitPathECI, getOrbitPathECF, getSatellitePositionAndVelocity } from '../services/orbitService';
 
 const props = defineProps<{
   satellites: SatelliteInfo[];
@@ -31,11 +31,20 @@ let groundStationsCollection: any = null;
 let dataLinksCollection: any = null;
 let isReady = false;
 
+// 卫星运动状态缓存
+// Key: satellite ID, Value: { x, y, z, vx, vy, vz, updateTime }
+const satelliteMotionCache = new Map<string, {
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  updateTime: number;
+}>();
+
 // 性能优化控制变量
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
 let updateTicket = 0; // 用于分帧更新的计数器
-const BATCH_COUNT = 32; // 将卫星分为4组，每帧更新一组 (大幅降低 CPU 压力)
+const BATCH_COUNT = 60; // 调整为 60 帧 (约1秒) 更新一次 SGP4，平衡精度与性能
+const INTERPOLATION_FREQ = 2; // 恢复每帧更新插值，消除 30fps 的卡顿感
 
 // 预分配临时对象，避免 GC
 let scratchCartesian: any = null;
@@ -203,6 +212,7 @@ const updateSatellites = () => {
   if (!isReady || !props.satellites.length) return;
   const Cesium = window.Cesium;
   pointsCollection.removeAll();
+  satelliteMotionCache.clear();
   props.satellites.forEach(sat => {
     pointsCollection.add({
       position: Cesium.Cartesian3.ZERO,
@@ -229,7 +239,11 @@ const onTick = (clock: any) => {
   // 分帧逻辑：计算当前帧需要处理的卫星索引范围
   const currentBatch = updateTicket % BATCH_COUNT;
   updateTicket++;
+  const nowTime = now.getTime();
 
+  // 性能优化：获取相机位置用于视锥剔除 (简单的地平线剔除)
+  const cameraPos = viewer.camera.position;
+  
   for (let i = 0; i < len; i++) {
     const point = pointsCollection.get(i);
     const sat = point.id as SatelliteInfo; 
@@ -238,17 +252,86 @@ const onTick = (clock: any) => {
     // 性能核心：只有以下情况才执行 SGP4 计算：
     // 1. 属于当前帧的处理批次
     // 2. 是被选中的卫星 (必须保证平滑)
-    // 3. (可选) 之前在华盛顿附近的卫星可以增加更新频率
-    if (i % BATCH_COUNT !== currentBatch && !isSelected) {
-      continue; 
+    const shouldSGP4Update = (i % BATCH_COUNT === currentBatch) || isSelected;
+    
+    // 插值更新频率控制：非选中卫星每 INTERPOLATION_FREQ 帧更新一次
+    // 使用 i + updateTicket 错峰更新，避免所有卫星在同一帧更新
+    const shouldInterpUpdate = isSelected || ((i + updateTicket) % INTERPOLATION_FREQ === 0);
+
+    // 如果既不需要 SGP4 更新，也不需要插值更新，直接跳过
+    if (!shouldSGP4Update && !shouldInterpUpdate) {
+      continue;
     }
 
-    const data = getSatellitePosition(sat, now);
-    if (data) {
+    let pos: { x: number, y: number, z: number } | null = null;
+
+    if (shouldSGP4Update) {
+      const data = getSatellitePositionAndVelocity(sat, now);
+      if (data) {
+        satelliteMotionCache.set(sat.id, {
+          x: data.x, y: data.y, z: data.z,
+          vx: data.vx, vy: data.vy, vz: data.vz,
+          updateTime: nowTime
+        });
+        pos = data;
+
+        // 更新样式 (仅在 SGP4 更新时处理，减少开销)
+        if (isSelected) {
+          point.color = Cesium.Color.YELLOW;
+          point.pixelSize = 8;
+        } else {
+          point.color = Cesium.Color.fromCssColorString('#06b6d4');
+          point.pixelSize = 3;
+        }
+      }
+    } else if (shouldInterpUpdate) {
+      // 使用缓存的速度进行外推 (Dead Reckoning)
+      const cached = satelliteMotionCache.get(sat.id);
+      if (cached) {
+        const dt = (nowTime - cached.updateTime) / 1000; // seconds
+        
+        // 线性外推
+        let px = cached.x + cached.vx * dt;
+        let py = cached.y + cached.vy * dt;
+        let pz = cached.z + cached.vz * dt;
+
+        // 关键修正：球面约束 (Spherical Constraint)
+        // 线性外推会沿切线飞出，导致高度增加。这里强制将位置拉回到原来的轨道高度。
+        // 假设短时间内轨道高度不变 (对于圆轨道近似成立)
+        const currentMagSq = px*px + py*py + pz*pz;
+        const cachedMagSq = cached.x*cached.x + cached.y*cached.y + cached.z*cached.z;
+        
+        // 只有当误差明显时才修正 (避免开方开销)
+        if (Math.abs(currentMagSq - cachedMagSq) > 1.0) {
+           const scale = Math.sqrt(cachedMagSq / currentMagSq);
+           px *= scale;
+           py *= scale;
+           pz *= scale;
+        }
+
+        pos = { x: px, y: py, z: pz };
+      }
+    }
+
+    if (pos) {
       // 零 GC 优化：复用 scratchCartesian 对象
-      scratchCartesian.x = data.x;
-      scratchCartesian.y = data.y;
-      scratchCartesian.z = data.z;
+      scratchCartesian.x = pos.x;
+      scratchCartesian.y = pos.y;
+      scratchCartesian.z = pos.z;
+      
+      // 视锥剔除/地平线剔除优化：
+      // 如果卫星在地球背面，且不是被选中的卫星，则跳过属性更新
+      // 简单的点积判断：(SatPos - EarthCenter) dot (CameraPos - EarthCenter)
+      // 注意：这里简化为直接用位置向量点积，因为 EarthCenter 是 (0,0,0)
+      // 阈值 -0.2 是经验值，稍微宽容一点避免边缘闪烁
+      /*
+      if (!isSelected) {
+         const dot = (scratchCartesian.x * cameraPos.x + 
+                      scratchCartesian.y * cameraPos.y + 
+                      scratchCartesian.z * cameraPos.z);
+         if (dot < -0.2) continue; 
+      }
+      */
       
       point.position = scratchCartesian; 
       
@@ -271,20 +354,12 @@ const onTick = (clock: any) => {
       }
       */
 
-      if (isSelected) {
-        point.color = Cesium.Color.YELLOW;
-        point.pixelSize = 8;
-        
-        if (beamCollection.length > 0) {
-          const beam = beamCollection.get(0);
-          const cartographic = Cesium.Cartographic.fromCartesian(scratchCartesian);
-          cartographic.height = 0;
-          const surfacePosition = Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, 0);
-          beam.positions = [scratchCartesian, surfacePosition];
-        }
-      } else {
-        point.color = Cesium.Color.fromCssColorString('#06b6d4');
-        point.pixelSize = 3;
+      if (isSelected && beamCollection.length > 0) {
+        const beam = beamCollection.get(0);
+        const cartographic = Cesium.Cartographic.fromCartesian(scratchCartesian);
+        cartographic.height = 0;
+        const surfacePosition = Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, 0);
+        beam.positions = [scratchCartesian, surfacePosition];
       }
     }
   }

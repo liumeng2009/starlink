@@ -65,6 +65,61 @@ export const getSatellitePosition = (sat: SatelliteInfo, date: Date) => {
   };
 };
 
+export const getSatellitePositionAndVelocity = (sat: SatelliteInfo, date: Date) => {
+  if (!satellite) return null;
+
+  // 1. Propagate at current time
+  const posVel = satellite.propagate(sat.satrec, date);
+  const posEci = posVel.position;
+  const velEci = posVel.velocity;
+
+  if (!posEci || !velEci) return null;
+
+  const gmst = satellite.gstime(date);
+  const posEcf = satellite.eciToEcf(posEci, gmst);
+
+  // 2. Propagate slightly in future to estimate ECF velocity
+  // 0.1 second delta for better precision? 1s is fine for visual.
+  // Let's use 0.5s to match the update rate roughly, but 1s is standard for velocity.
+  const dt = 1.0; // seconds
+  const dateNext = new Date(date.getTime() + dt * 1000);
+  const posVelNext = satellite.propagate(sat.satrec, dateNext);
+  const posEciNext = posVelNext.position;
+  
+  if (!posEciNext) return null;
+
+  const gmstNext = satellite.gstime(dateNext);
+  const posEcfNext = satellite.eciToEcf(posEciNext, gmstNext);
+
+  // Calculate velocity vector in m/s (satellite.js uses km)
+  const vx = ((posEcfNext.x - posEcf.x) / dt) * 1000;
+  const vy = ((posEcfNext.y - posEcf.y) / dt) * 1000;
+  const vz = ((posEcfNext.z - posEcf.z) / dt) * 1000;
+
+  // 3. Calculate Height/Velocity for UI (same as before)
+  const vel = Math.sqrt(
+    Math.pow(velEci.x, 2) + 
+    Math.pow(velEci.y, 2) + 
+    Math.pow(velEci.z, 2)
+  );
+
+  const geodetic = satellite.eciToGeodetic(posEci, gmst);
+  const heightKm = geodetic.height;
+
+  return {
+    x: posEcf.x * 1000,
+    y: posEcf.y * 1000,
+    z: posEcf.z * 1000,
+    vx,
+    vy,
+    vz,
+    velocity: vel,
+    height: heightKm,
+    lat: satellite.degreesLat(geodetic.latitude),
+    lon: satellite.degreesLong(geodetic.longitude)
+  };
+};
+
 /**
  * Calculates a series of points representing the satellite's orbit as a closed loop.
  * It calculates the orbital period and projects the path into a fixed Earth frame (ECF)
