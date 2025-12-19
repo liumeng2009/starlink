@@ -35,6 +35,9 @@ let lastFpsUpdateTime = performance.now();
 let updateTicket = 0; // 用于分帧更新的计数器
 const BATCH_COUNT = 4; // 将卫星分为4组，每帧更新一组 (大幅降低 CPU 压力)
 
+// 预分配临时对象，避免 GC
+let scratchCartesian: any = null;
+
 // 华盛顿地面站配置
 const WA_CENTER = { lat: 47.6, lon: -121.5 };
 const groundStations = [
@@ -54,6 +57,8 @@ onMounted(() => {
   const Cesium = window.Cesium;
   if (!Cesium) return;
 
+  scratchCartesian = new Cesium.Cartesian3();
+
   viewer = new Cesium.Viewer(containerRef.value, {
     animation: false,
     baseLayerPicker: false,
@@ -69,27 +74,67 @@ onMounted(() => {
     navigationInstructionsInitiallyVisible: false,
     creditContainer: document.createElement('div'),
     shouldAnimate: !props.isPaused, 
+    requestRenderMode: true, // 显式开启按需渲染
+    maximumRenderTimeChange: Infinity,
+    contextOptions: {
+      webgl: {
+        powerPreference: "high-performance", // 强制使用独显
+        alpha: false, // 关闭 canvas 透明通道，减少合成开销
+        antialias: false, // 关闭原生抗锯齿
+        preserveDrawingBuffer: false,
+        failIfMajorPerformanceCaveat: false,
+      }
+    },
+    orderIndependentTranslucency: false, // 禁用 OIT (透明度排序)，大幅提升透明物体渲染性能
     imageryProvider: new Cesium.ArcGisMapServerImageryProvider({
       url: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer",
     }),
   });
 
+  // --- 核心性能优化配置 (GPU & 渲染管线) ---
+
+  // 1. 分辨率缩放：在视网膜屏幕上强制使用 1.0 或更低 (0.8-0.9) 以大幅降低片元着色器压力
+  viewer.resolutionScale = window.devicePixelRatio > 1 ? 0.9 : 1.0;
+
+  // 2. 关闭高动态范围渲染 (HDR)：减少显存带宽占用
+  viewer.scene.highDynamicRange = false;
+
+  // 3. 关闭抗锯齿 (FXAA)：虽然有锯齿，但能显著提速
+  viewer.scene.postProcessStages.fxaa.enabled = false;
+
+  // 4. 关闭大气层和天空盒效果：这些是极其昂贵的透明度混合操作
+  viewer.scene.skyAtmosphere.show = false;
+  viewer.scene.skyBox.show = false; // 如果背景是纯黑，可以关掉天空盒
+  viewer.scene.sun.show = false;    // 关闭太阳渲染
+  viewer.scene.moon.show = false;   // 关闭月亮渲染
+
+  // 5. 简化地球渲染
+  viewer.scene.globe.enableLighting = false; // 关闭动态光照计算
+  viewer.scene.globe.showGroundAtmosphere = false; // 关闭地面大气效果
+  viewer.scene.fog.enabled = false; // 关闭雾效
+  
+  // 6. 深度检测优化
+  viewer.scene.globe.depthTestAgainstTerrain = false; // 防止Z-fighting并减少深度测试开销
+  viewer.scene.logarithmicDepthBuffer = false; // 如果没有严重的Z-fighting，关闭它能省一点性能
+
+  // 7. 背景色设为纯黑，避免不必要的清除操作
+  viewer.scene.backgroundColor = Cesium.Color.BLACK;
+  
+  // 8. 拾取优化：禁用半透明拾取，减少离屏渲染
+  viewer.scene.pickTranslucency = false;
+
+  // -----------------------------------------
+
   viewer.clock.multiplier = props.playbackSpeed;
   viewer.clock.currentTime = Cesium.JulianDate.fromDate(new Date());
-
-  viewer.scene.globe.enableLighting = true;
-  viewer.scene.highDynamicRange = true;
-  viewer.scene.backgroundColor = Cesium.Color.BLACK;
-  // 性能微调：禁用大气层等高耗能效果（如需极致性能）
-  // viewer.scene.skyAtmosphere.show = false;
 
   pointsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
   orbitPathCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   beamCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   dataLinksCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
-  groundStationsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
+  // groundStationsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
   
-  initGroundStations();
+  // initGroundStations();
 
   const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
   handler.setInputAction((movement: any) => {
@@ -105,6 +150,12 @@ onMounted(() => {
   
   const fpsLoop = (now: number) => {
     if (!isReady) return;
+    
+    // 强制渲染循环：在播放时显式请求渲染，防止 requestRenderMode 导致画面静止
+    if (!props.isPaused && viewer) {
+      viewer.scene.requestRender();
+    }
+
     frameCount++;
     if (now - lastFpsUpdateTime > 1000) {
       emit('update:fps', Math.round((frameCount * 1000) / (now - lastFpsUpdateTime)));
@@ -192,16 +243,21 @@ const onTick = (clock: any) => {
 
     const data = getSatellitePosition(sat, now);
     if (data) {
-      const position = new Cesium.Cartesian3(data.x, data.y, data.z);
-      point.position = position;
+      // 零 GC 优化：复用 scratchCartesian 对象
+      scratchCartesian.x = data.x;
+      scratchCartesian.y = data.y;
+      scratchCartesian.z = data.z;
+      
+      point.position = scratchCartesian; 
       
       // 飞线空间粗筛：只有在华盛顿经纬度包围盒内的才计算距离
+      /*
       if (data.lon > -130 && data.lon < -110 && data.lat > 40 && data.lat < 55) {
         gsCartesians.forEach(gsPos => {
-          const dist = Cesium.Cartesian3.distance(position, gsPos);
+          const dist = Cesium.Cartesian3.distance(scratchCartesian, gsPos);
           if (dist < COMM_RANGE) {
             dataLinksCollection.add({
-              positions: [position, gsPos],
+              positions: [scratchCartesian, gsPos],
               width: 1.0,
               material: Cesium.Material.fromType('PolylineGlow', {
                 glowPower: 0.05,
@@ -211,6 +267,7 @@ const onTick = (clock: any) => {
           }
         });
       }
+      */
 
       if (isSelected) {
         point.color = Cesium.Color.YELLOW;
@@ -218,10 +275,10 @@ const onTick = (clock: any) => {
         
         if (beamCollection.length > 0) {
           const beam = beamCollection.get(0);
-          const cartographic = Cesium.Cartographic.fromCartesian(position);
+          const cartographic = Cesium.Cartographic.fromCartesian(scratchCartesian);
           cartographic.height = 0;
           const surfacePosition = Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, 0);
-          beam.positions = [position, surfacePosition];
+          beam.positions = [scratchCartesian, surfacePosition];
         }
       } else {
         point.color = Cesium.Color.fromCssColorString('#06b6d4');

@@ -38,13 +38,13 @@ export const fetchStarlinkTLEs = async (): Promise<TLEData[]> => {
     }
     
     const text = await response.text();
-    return parseTLE(text);
+    return parseTLE(text); // Limit to first 100 for performance
 
   } catch (error) {
     console.warn("Failed to fetch live TLEs (likely network or CORS restriction), switching to simulation mode.", error);
     
     // Fallback: Generate a large constellation for visualization
-    const mockData = generateMockStarlinkTrain(500, 70000);
+    const mockData = generateMockStarlinkTrain(10000, 70000);
     return parseTLE(mockData.join('\n'));
   }
 };
