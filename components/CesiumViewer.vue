@@ -26,7 +26,7 @@ let billboardCollection: any = null;
 let orbitPathCollection: any = null;
 let activeOrbitPolyline: any = null;
 let cachedOrbitECI: any[] = []; // 缓存 ECI 轨道点
-let beamCollection: any = null;
+// let beamCollection: any = null;
 let groundStationsCollection: any = null;
 let dataLinksCollection: any = null;
 let isReady = false;
@@ -169,7 +169,7 @@ onMounted(() => {
 
   billboardCollection = viewer.scene.primitives.add(new Cesium.BillboardCollection());
   orbitPathCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
-  beamCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
+  // beamCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   dataLinksCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   // groundStationsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
   
@@ -383,6 +383,7 @@ const onTick = (clock: any) => {
       }
       */
 
+      /*
       if (isSelected && beamCollection.length > 0) {
         const beam = beamCollection.get(0);
         const cartographic = Cesium.Cartographic.fromCartesian(scratchCartesian);
@@ -390,6 +391,7 @@ const onTick = (clock: any) => {
         const surfacePosition = Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, 0);
         beam.positions = [scratchCartesian, surfacePosition];
       }
+      */
     }
   }
 
@@ -405,7 +407,7 @@ watch(() => props.selectedSatelliteId, () => {
   const Cesium = window.Cesium;
   orbitPathCollection.removeAll();
   activeOrbitPolyline = null;
-  beamCollection.removeAll();
+  // beamCollection.removeAll();
   cachedOrbitECI = [];
 
   if (props.selectedSatelliteId) {
@@ -423,6 +425,7 @@ watch(() => props.selectedSatelliteId, () => {
           material: Cesium.Material.fromType('Color', { color: Cesium.Color.YELLOW.withAlpha(0.3) })
         });
       }
+      /*
       beamCollection.add({
         positions: [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO],
         width: 1.5,
@@ -431,6 +434,7 @@ watch(() => props.selectedSatelliteId, () => {
           color: Cesium.Color.CYAN.withAlpha(0.8) 
         })
       });
+      */
     }
   }
 });
