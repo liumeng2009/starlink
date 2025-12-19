@@ -327,15 +327,24 @@ const onTick = (clock: any) => {
       // 如果卫星在地球背面，且不是被选中的卫星，则跳过属性更新
       // 简单的点积判断：(SatPos - EarthCenter) dot (CameraPos - EarthCenter)
       // 注意：这里简化为直接用位置向量点积，因为 EarthCenter 是 (0,0,0)
-      // 阈值 -0.2 是经验值，稍微宽容一点避免边缘闪烁
-      /*
       if (!isSelected) {
          const dot = (scratchCartesian.x * cameraPos.x + 
                       scratchCartesian.y * cameraPos.y + 
                       scratchCartesian.z * cameraPos.z);
-         if (dot < -0.2) continue; 
+         
+         // dot < 0 表示卫星在地球背面 (相对于相机)
+         // 我们可以直接隐藏它，或者不更新位置
+         // 为了性能，我们选择不更新位置，并将其隐藏
+         if (dot < 0) {
+            if (billboard.show) billboard.show = false;
+            continue;
+         } else {
+            if (!billboard.show) billboard.show = true;
+         }
+      } else {
+         // 选中的卫星始终显示
+         if (!billboard.show) billboard.show = true;
       }
-      */
       
       billboard.position = scratchCartesian; 
       
