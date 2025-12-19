@@ -32,13 +32,14 @@ let dataLinksCollection: any = null;
 let isReady = false;
 let satelliteImage: any = null; // 缓存生成的卫星图片
 
-// 卫星运动状态缓存
-// Key: satellite ID, Value: { x, y, z, vx, vy, vz, updateTime }
-const satelliteMotionCache = new Map<string, {
-  x: number; y: number; z: number;
-  vx: number; vy: number; vz: number;
-  updateTime: number;
-}>();
+// 卫星运动状态缓存 (Typed Arrays for performance)
+let satPositionsX: Float32Array;
+let satPositionsY: Float32Array;
+let satPositionsZ: Float32Array;
+let satVelocitiesX: Float32Array;
+let satVelocitiesY: Float32Array;
+let satVelocitiesZ: Float32Array;
+let satUpdateTimes: Float64Array;
 
 // 性能优化控制变量
 let frameCount = 0;
@@ -108,7 +109,8 @@ onMounted(() => {
   // --- 核心性能优化配置 (GPU & 渲染管线) ---
 
   // 1. 分辨率缩放：在视网膜屏幕上强制使用 1.0 或更低 (0.8-0.9) 以大幅降低片元着色器压力
-  viewer.resolutionScale = window.devicePixelRatio > 1 ? 0.9 : 1.0;
+  // 进一步降低分辨率以提升 FPS
+  viewer.resolutionScale = window.devicePixelRatio > 1 ? 0.7 : 0.7;
 
   // 2. 关闭高动态范围渲染 (HDR)：减少显存带宽占用
   viewer.scene.highDynamicRange = false;
@@ -215,8 +217,18 @@ const updateSatellites = () => {
   if (!isReady || !props.satellites.length) return;
   const Cesium = window.Cesium;
   billboardCollection.removeAll();
-  satelliteMotionCache.clear();
-  props.satellites.forEach(sat => {
+  
+  // 初始化 Typed Arrays
+  const count = props.satellites.length;
+  satPositionsX = new Float32Array(count);
+  satPositionsY = new Float32Array(count);
+  satPositionsZ = new Float32Array(count);
+  satVelocitiesX = new Float32Array(count);
+  satVelocitiesY = new Float32Array(count);
+  satVelocitiesZ = new Float32Array(count);
+  satUpdateTimes = new Float64Array(count);
+
+  props.satellites.forEach((sat, index) => {
     billboardCollection.add({
       position: Cesium.Cartesian3.ZERO,
       image: satelliteImage,
@@ -224,6 +236,8 @@ const updateSatellites = () => {
       color: Cesium.Color.WHITE, // 使用图片原色，或者根据需要染色
       id: sat,
     });
+    // 初始化时间为 0，确保第一次 update 会触发
+    satUpdateTimes[index] = 0;
   });
 };
 
@@ -272,11 +286,15 @@ const onTick = (clock: any) => {
     if (shouldSGP4Update) {
       const data = getSatellitePositionAndVelocity(sat, now);
       if (data) {
-        satelliteMotionCache.set(sat.id, {
-          x: data.x, y: data.y, z: data.z,
-          vx: data.vx, vy: data.vy, vz: data.vz,
-          updateTime: nowTime
-        });
+        // 更新 Typed Arrays
+        satPositionsX[i] = data.x;
+        satPositionsY[i] = data.y;
+        satPositionsZ[i] = data.z;
+        satVelocitiesX[i] = data.vx;
+        satVelocitiesY[i] = data.vy;
+        satVelocitiesZ[i] = data.vz;
+        satUpdateTimes[i] = nowTime;
+
         pos = data;
 
         // 更新样式 (仅在 SGP4 更新时处理，减少开销)
@@ -290,20 +308,28 @@ const onTick = (clock: any) => {
       }
     } else if (shouldInterpUpdate) {
       // 使用缓存的速度进行外推 (Dead Reckoning)
-      const cached = satelliteMotionCache.get(sat.id);
-      if (cached) {
-        const dt = (nowTime - cached.updateTime) / 1000; // seconds
+      // 检查是否有缓存数据 (时间不为0)
+      if (satUpdateTimes[i] > 0) {
+        const lastTime = satUpdateTimes[i];
+        const dt = (nowTime - lastTime) / 1000; // seconds
         
+        const cx = satPositionsX[i];
+        const cy = satPositionsY[i];
+        const cz = satPositionsZ[i];
+        const cvx = satVelocitiesX[i];
+        const cvy = satVelocitiesY[i];
+        const cvz = satVelocitiesZ[i];
+
         // 线性外推
-        let px = cached.x + cached.vx * dt;
-        let py = cached.y + cached.vy * dt;
-        let pz = cached.z + cached.vz * dt;
+        let px = cx + cvx * dt;
+        let py = cy + cvy * dt;
+        let pz = cz + cvz * dt;
 
         // 关键修正：球面约束 (Spherical Constraint)
         // 线性外推会沿切线飞出，导致高度增加。这里强制将位置拉回到原来的轨道高度。
         // 假设短时间内轨道高度不变 (对于圆轨道近似成立)
         const currentMagSq = px*px + py*py + pz*pz;
-        const cachedMagSq = cached.x*cached.x + cached.y*cached.y + cached.z*cached.z;
+        const cachedMagSq = cx*cx + cy*cy + cz*cz;
         
         // 只有当误差明显时才修正 (避免开方开销)
         if (Math.abs(currentMagSq - cachedMagSq) > 1.0) {
