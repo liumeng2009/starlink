@@ -11,3 +11,6 @@ declare module '*?worker' {
   }
   export default workerConstructor
 }
+
+declare module 'cesium-mvt-imagery-provider';
+

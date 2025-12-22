@@ -17,6 +17,7 @@ const playbackSpeed = ref(1);
 const isPaused = ref(false);
 const manualSeekTime = ref<Date | null>(null);
 const sceneMode = ref<'3D' | '2D'>('3D');
+const layerMode = ref<'MVT' | 'ArcGIS'>('MVT');
 const currentFps = ref(0);
 
 onMounted(async () => {
@@ -69,6 +70,7 @@ const getSelectedSatellite = (): SatelliteInfo | null => {
         :isPaused="isPaused"
         :manualTime="manualSeekTime"
         :sceneMode="sceneMode"
+        :layerMode="layerMode"
         @satelliteClick="handleSatelliteClick"
         @tick="handleTick"
         @update:fps="currentFps = $event"
@@ -80,7 +82,9 @@ const getSelectedSatellite = (): SatelliteInfo | null => {
         :currentTime="currentTime"
         :fps="currentFps"
         :sceneMode="sceneMode"
+        :layerMode="layerMode"
         @update:sceneMode="sceneMode = $event"
+        @update:layerMode="layerMode = $event"
         @closeSelection="selectedSatId = null"
       />
 

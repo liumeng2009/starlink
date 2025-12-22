@@ -24,7 +24,7 @@ export interface SatelliteInfo {
 // Cesium Global Type Augmentation
 declare global {
   interface Window {
-    Cesium: any;
+    // Cesium: any; // Removed as we are using npm package
     satellite: any;
   }
 }

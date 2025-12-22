@@ -1,8 +1,6 @@
 import { SatelliteInfo, TLEData } from '../types';
 import SatelliteWorker from './satellite.worker?worker';
-
-// Access global satellite object loaded via CDN
-const satellite = window.satellite;
+import * as satellite from 'satellite.js';
 
 let worker: Worker | null = null;
 let onUpdateCallback: ((positions: Float32Array, ids: string[]) => void) | null = null;

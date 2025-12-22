@@ -9,11 +9,13 @@ const props = defineProps<{
   currentTime: Date;
   fps: number;
   sceneMode: '3D' | '2D';
+  layerMode: 'MVT' | 'ArcGIS';
 }>();
 
 const emit = defineEmits<{
   (e: 'closeSelection'): void;
   (e: 'update:sceneMode', mode: '3D' | '2D'): void;
+  (e: 'update:layerMode', mode: 'MVT' | 'ArcGIS'): void;
 }>();
 
 const liveStats = ref<{lat: number, lon: number, height: number, velocity: number} | null>(null);
@@ -54,6 +56,25 @@ watch(() => [props.selectedSatellite, props.currentTime], () => {
 
       <!-- Controls Group -->
       <div class="flex gap-2">
+        <!-- Layer Switcher -->
+        <div class="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 p-1 rounded-lg flex shadow-xl">
+          <button 
+            @click="emit('update:layerMode', 'MVT')"
+            class="px-4 py-2 rounded-md transition-all duration-200 text-xs font-bold uppercase"
+            :class="layerMode === 'MVT' ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'"
+          >
+            Local MVT
+          </button>
+          <button 
+            @click="emit('update:layerMode', 'ArcGIS')"
+            class="px-4 py-2 rounded-md transition-all duration-200 text-xs font-bold uppercase"
+            :class="layerMode === 'ArcGIS' ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'"
+          >
+            ArcGIS
+          </button>
+        </div>
+
+        <!-- Scene Mode Switcher -->
         <div class="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 p-1 rounded-lg flex shadow-xl">
           <button 
             @click="emit('update:sceneMode', '3D')"

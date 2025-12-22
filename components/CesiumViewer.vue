@@ -2,6 +2,8 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { SatelliteInfo } from '../types';
 import { getSatellitePosition, getOrbitPathECI, getOrbitPathECF, getSatellitePositionAndVelocity, initWorker, requestWorkerUpdate } from '../services/orbitService';
+import CesiumMVTImageryProvider from "cesium-mvt-imagery-provider";
+import * as Cesium from 'cesium';
 
 const props = defineProps<{
   satellites: SatelliteInfo[];
@@ -10,6 +12,7 @@ const props = defineProps<{
   isPaused: boolean;
   manualTime: Date | null;
   sceneMode: '3D' | '2D';
+  layerMode: 'MVT' | 'ArcGIS';
 }>();
 
 const emit = defineEmits<{
@@ -31,6 +34,40 @@ let groundStationsCollection: any = null;
 let dataLinksCollection: any = null;
 let isReady = false;
 let satelliteImage: any = null; // 缓存生成的卫星图片
+
+const toggleLayer = () => {
+  if (!viewer) return;
+  viewer.imageryLayers.removeAll();
+  
+  if (props.layerMode === 'MVT') {
+    try {
+      // 改用 UrlTemplateImageryProvider 加载服务端渲染好的 PNG 切片
+      // 这种方式对浏览器性能消耗极低，因为不需要在前端进行矢量光栅化
+      const provider = new Cesium.UrlTemplateImageryProvider({
+        url: 'http://localhost:8000/africa/{z}/{x}/{y}.png',
+        credit: 'Localhost PNG',
+        maximumLevel: 14, // 根据你的切片数据调整最大层级
+      });
+      viewer.imageryLayers.addImageryProvider(provider);
+    } catch (e) {
+      console.error("Failed to load PNG provider", e);
+    }
+  } else {
+    try {
+      Cesium.ArcGisMapServerImageryProvider.fromUrl(
+        "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer"
+      ).then((provider) => {
+        viewer.imageryLayers.addImageryProvider(provider);
+      }).catch((error) => {
+        console.error("Failed to load ArcGIS provider", error);
+      });
+    } catch (e) {
+      console.error("Error initiating ArcGIS provider", e);
+    }
+  }
+};
+
+watch(() => props.layerMode, toggleLayer);
 
 // 卫星运动状态缓存 (Typed Arrays for performance)
 let satPositions: Float32Array | null = null;
@@ -63,9 +100,6 @@ const COMM_RANGE = 600000;
 onMounted(() => {
   if (!containerRef.value) return;
 
-  const Cesium = window.Cesium;
-  if (!Cesium) return;
-
   scratchCartesian = new Cesium.Cartesian3();
   // 使用 public 目录下的图片
   satelliteImage = 'satellite.png';
@@ -97,9 +131,8 @@ onMounted(() => {
       }
     },
     orderIndependentTranslucency: false, // 禁用 OIT (透明度排序)，大幅提升透明物体渲染性能
-    imageryProvider: new Cesium.ArcGisMapServerImageryProvider({
-      url: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer",
-    }),
+    imageryProvider: false, // Disable default imagery provider
+    baseLayerPicker: false, // Ensure base layer picker is off
   });
 
   // --- 核心性能优化配置 (GPU & 渲染管线) ---
@@ -134,6 +167,9 @@ onMounted(() => {
   
   // 8. 拾取优化：禁用半透明拾取，减少离屏渲染
   viewer.scene.pickTranslucency = false;
+
+  // Initialize Layer
+  toggleLayer();
 
   // -----------------------------------------
 
@@ -183,7 +219,6 @@ onMounted(() => {
 });
 
 const initGroundStations = () => {
-  const Cesium = window.Cesium;
   groundStations.forEach(gs => {
     const pos = Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat);
     groundStationsCollection.add({
@@ -217,7 +252,6 @@ const updateSatellites = () => {
   const plainTLEs = JSON.parse(JSON.stringify(props.satellites.map(s => s.tle)));
   initWorker(plainTLEs);
 
-  const Cesium = window.Cesium;
   billboardCollection.removeAll();
   
   // 初始化 Typed Arrays
@@ -238,7 +272,6 @@ const updateSatellites = () => {
 const onTick = (clock: any) => {
   if (!billboardCollection || !isReady) return;
   
-  const Cesium = window.Cesium;
   const now = Cesium.JulianDate.toDate(clock.currentTime);
   emit('tick', now);
 
@@ -318,7 +351,6 @@ const onTick = (clock: any) => {
 watch(() => props.satellites, updateSatellites);
 watch(() => props.selectedSatelliteId, () => {
   if (!isReady) return;
-  const Cesium = window.Cesium;
   orbitPathCollection.removeAll();
   activeOrbitPolyline = null;
   // beamCollection.removeAll();
