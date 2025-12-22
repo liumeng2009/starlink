@@ -316,10 +316,6 @@ const drawCairoHexagons = () => {
     });
     cairoHexagonEntities.push(entity);
   });
-
-  viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 100000)
-  });
   
   // Cache Cairo position for satellite checks
   cairoCartesian = Cesium.Cartesian3.fromDegrees(centerLon, centerLat);
@@ -329,6 +325,12 @@ watch(() => props.cairoHighlightEnabled, (enabled) => {
   cairoHexagonEntities.forEach(entity => {
     entity.show = enabled;
   });
+
+  if (enabled && viewer) {
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(31.2357, 30.0444, 100000)
+    });
+  }
 });
 
 const updateSatellites = () => {
@@ -352,6 +354,9 @@ const updateSatellites = () => {
       scale: 0.1, // 图片可能比较大，默认缩小到 0.1
       color: Cesium.Color.WHITE, // 使用图片原色，或者根据需要染色
       id: sat,
+      // 增加近大远小的立体感：近处放大，远处缩小
+      // 100km处放大2.5倍，20000km处缩小到0.5倍
+      scaleByDistance: new Cesium.NearFarScalar(1.0e5, 2.5, 2.0e7, 0.5)
     });
   });
 };
@@ -435,7 +440,12 @@ const onTick = (clock: any) => {
     // 这里的计算量主要是距离判断，比 DOM/WebGL 操作轻得多，可以每帧全量跑
     const cairoEnabled = props.cairoHighlightEnabled && cairoCartesian;
     const CAIRO_PROXIMITY_SQ = 1000000000000; // 1000km squared
-    const HEX_RADIUS_DEG_SQ = 0.0247; // ~17.5km squared in degrees
+    
+    // Cone check constants for 17.5km radius
+    const EARTH_RADIUS = 6378137.0;
+    const HEX_RADIUS = 17500.0;
+    const COS_THETA = Math.cos(HEX_RADIUS / EARTH_RADIUS);
+    const COS_THETA_SQ = COS_THETA * COS_THETA;
 
     for (let i = 0; i < len; i++) {
       const billboard = billboardCollection.get(i);
@@ -458,20 +468,22 @@ const onTick = (clock: any) => {
         const distSq = dx*dx + dy*dy + dz*dz;
 
         if (distSq < CAIRO_PROXIMITY_SQ) {
-          // 只有在粗略范围内才进行昂贵的经纬度转换
-          const satPos = new Cesium.Cartesian3(px, py, pz);
-          const satCartographic = Cesium.Cartographic.fromCartesian(satPos);
-          const satLat = satCartographic.latitude * 180 / Math.PI;
-          const satLon = satCartographic.longitude * 180 / Math.PI;
-          const cosLat = Math.cos(satCartographic.latitude);
-
+          const satMagSq = px*px + py*py + pz*pz;
+          
           for (const hex of cairoHexagonData) {
-            const dLat = satLat - hex.lat;
-            const dLon = (satLon - hex.lon) * cosLat;
+            const hx = hex.center.x;
+            const hy = hex.center.y;
+            const hz = hex.center.z;
             
-            if (dLat*dLat + dLon*dLon < HEX_RADIUS_DEG_SQ) {
+            // Dot product check for "Cone" intersection
+            // This checks if the satellite is within the angular radius of the hexagon
+            // effectively ignoring altitude and avoiding Cartographic conversion
+            const dot = px*hx + py*hy + pz*hz;
+            const hexMagSq = hx*hx + hy*hy + hz*hz;
+            
+            if (dot > 0 && (dot * dot) > (COS_THETA_SQ * satMagSq * hexMagSq)) {
                isOverCairo = true;
-               // 绘制连线：使用 new Cartesian3 确保坐标引用独立，防止连线错乱
+               const satPos = new Cesium.Cartesian3(px, py, pz);
                cairoLinksCollection.add({
                  positions: [hex.center, satPos],
                  width: 2,
