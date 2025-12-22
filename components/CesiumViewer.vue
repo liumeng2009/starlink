@@ -220,6 +220,7 @@ onMounted(() => {
 
   isReady = true;
   updateSatellites();
+  drawCairoHexagons();
 });
 
 const initGroundStations = () => {
@@ -245,6 +246,63 @@ const initGroundStations = () => {
         outlineWidth: 1
       }
     });
+  });
+};
+
+const drawCairoHexagons = () => {
+  if (!viewer) return;
+
+  const centerLat = 30.0444;
+  const centerLon = 31.2357;
+  // Hexagon widest part (long diagonal) = 2 * radius
+  // User requested 35km width -> radius = 17.5km = 17500m
+  const radius = 17500; 
+
+  // Axial coordinates for a honeycomb of 10 hexes
+  const qrs = [
+    {q: 0, r: 0},
+    {q: 1, r: 0}, {q: 1, r: -1}, {q: 0, r: -1}, {q: -1, r: 0}, {q: -1, r: 1}, {q: 0, r: 1},
+    {q: 2, r: 0}, {q: 2, r: -1}, {q: 2, r: -2}
+  ];
+
+  const metersPerDegLat = 111320;
+  const metersPerDegLon = 111320 * Math.cos(centerLat * Math.PI / 180);
+
+  qrs.forEach((hex, index) => {
+    const x_m = radius * Math.sqrt(3) * (hex.q + hex.r / 2);
+    const y_m = radius * 3/2 * hex.r;
+
+    const dLon = x_m / metersPerDegLon;
+    const dLat = y_m / metersPerDegLat;
+
+    const hexCenterLon = centerLon + dLon;
+    const hexCenterLat = centerLat + dLat;
+
+    const positions = [];
+    for (let i = 0; i < 6; i++) {
+      // Rotate by 30 degrees (or -30) to make it Pointy Topped to match the grid layout
+      const angle_rad = Math.PI / 180 * (60 * i - 30);
+      const px = radius * Math.cos(angle_rad);
+      const py = radius * Math.sin(angle_rad);
+      positions.push(hexCenterLon + (px / metersPerDegLon));
+      positions.push(hexCenterLat + (py / metersPerDegLat));
+    }
+
+    viewer.entities.add({
+      name: `Cairo Hexagon ${index + 1}`,
+      polygon: {
+        hierarchy: Cesium.Cartesian3.fromDegreesArray(positions),
+        material: Cesium.Color.fromCssColorString('#FFD700').withAlpha(0.3),
+        outline: true,
+        outlineColor: Cesium.Color.fromCssColorString('#FFD700'),
+        outlineWidth: 2,
+        height: 0
+      }
+    });
+  });
+
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 100000)
   });
 };
 
