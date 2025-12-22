@@ -1,7 +1,38 @@
 import { SatelliteInfo, TLEData } from '../types';
+import SatelliteWorker from './satellite.worker?worker';
 
 // Access global satellite object loaded via CDN
 const satellite = window.satellite;
+
+let worker: Worker | null = null;
+let onUpdateCallback: ((positions: Float32Array, ids: string[]) => void) | null = null;
+
+export const initWorker = (tles: TLEData[]) => {
+  if (worker) worker.terminate();
+  worker = new SatelliteWorker();
+  
+  worker.onmessage = (e) => {
+    const { type, positions, ids } = e.data;
+    if (type === 'propagate-result' && onUpdateCallback) {
+      onUpdateCallback(positions, ids);
+    }
+  };
+
+  worker.postMessage({
+    type: 'init',
+    payload: tles
+  });
+};
+
+export const requestWorkerUpdate = (date: Date, callback: (positions: Float32Array, ids: string[]) => void) => {
+  if (!worker) return;
+  onUpdateCallback = callback;
+  worker.postMessage({
+    type: 'propagate',
+    payload: { date }
+  });
+};
+
 
 export const initializeSatellites = (tles: TLEData[]): SatelliteInfo[] => {
   if (!satellite) {

@@ -4,3 +4,10 @@ declare module '*.vue' {
   const component: DefineComponent<{}, {}, any>
   export default component
 }
+
+declare module '*?worker' {
+  const workerConstructor: {
+    new (): Worker
+  }
+  export default workerConstructor
+}
