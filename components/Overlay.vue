@@ -10,12 +10,14 @@ const props = defineProps<{
   fps: number;
   sceneMode: '3D' | '2D';
   layerMode: 'MVT' | 'ArcGIS' | 'None';
+  cairoHighlightEnabled: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'closeSelection'): void;
   (e: 'update:sceneMode', mode: '3D' | '2D'): void;
   (e: 'update:layerMode', mode: 'MVT' | 'ArcGIS' | 'None'): void;
+  (e: 'update:cairoHighlightEnabled', enabled: boolean): void;
 }>();
 
 const liveStats = ref<{lat: number, lon: number, height: number, velocity: number} | null>(null);
@@ -96,6 +98,18 @@ watch(() => [props.selectedSatellite, props.currentTime], () => {
             :class="sceneMode === '2D' ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'"
           >
             2D Map
+          </button>
+        </div>
+
+        <!-- Cairo Highlight Toggle -->
+        <div class="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 p-1 rounded-lg flex shadow-xl">
+          <button 
+            @click="emit('update:cairoHighlightEnabled', !cairoHighlightEnabled)"
+            class="px-4 py-2 rounded-md transition-all duration-200 text-xs font-bold uppercase flex items-center gap-2"
+            :class="cairoHighlightEnabled ? 'bg-red-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'"
+          >
+            <span class="w-2 h-2 rounded-full" :class="cairoHighlightEnabled ? 'bg-white' : 'bg-slate-500'"></span>
+            Cairo Zone
           </button>
         </div>
       </div>

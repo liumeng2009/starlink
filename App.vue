@@ -18,6 +18,7 @@ const isPaused = ref(false);
 const manualSeekTime = ref<Date | null>(null);
 const sceneMode = ref<'3D' | '2D'>('3D');
 const layerMode = ref<'MVT' | 'ArcGIS' | 'None'>('MVT');
+const cairoHighlightEnabled = ref(false);
 const currentFps = ref(0);
 
 onMounted(async () => {
@@ -71,6 +72,7 @@ const getSelectedSatellite = (): SatelliteInfo | null => {
         :manualTime="manualSeekTime"
         :sceneMode="sceneMode"
         :layerMode="layerMode"
+        :cairoHighlightEnabled="cairoHighlightEnabled"
         @satelliteClick="handleSatelliteClick"
         @tick="handleTick"
         @update:fps="currentFps = $event"
@@ -83,8 +85,10 @@ const getSelectedSatellite = (): SatelliteInfo | null => {
         :fps="currentFps"
         :sceneMode="sceneMode"
         :layerMode="layerMode"
+        :cairoHighlightEnabled="cairoHighlightEnabled"
         @update:sceneMode="sceneMode = $event"
         @update:layerMode="layerMode = $event"
+        @update:cairoHighlightEnabled="cairoHighlightEnabled = $event"
         @closeSelection="selectedSatId = null"
       />
 

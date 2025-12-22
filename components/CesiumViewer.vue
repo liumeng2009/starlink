@@ -13,6 +13,7 @@ const props = defineProps<{
   manualTime: Date | null;
   sceneMode: '3D' | '2D';
   layerMode: 'MVT' | 'ArcGIS' | 'None';
+  cairoHighlightEnabled: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -34,6 +35,9 @@ let groundStationsCollection: any = null;
 let dataLinksCollection: any = null;
 let isReady = false;
 let satelliteImage: any = null; // 缓存生成的卫星图片
+let cairoHexagonEntities: any[] = []; // Store hexagon entities
+let cairoLinksCollection: any = null; // Collection for data links
+let cairoHexagonData: { center: any, lat: number, lon: number }[] = []; // Store hexagon center data for calculations
 
 const toggleLayer = () => {
   if (!viewer) return;
@@ -86,8 +90,7 @@ let updateFrame = 0;
 let isWorkerBusy = false;
 
 // 预分配临时对象，避免 GC
-let scratchCartesian: any = null;
-
+let scratchCartesian: any = null;let cairoCartesian: any = null;
 // 华盛顿地面站配置
 const WA_CENTER = { lat: 47.6, lon: -121.5 };
 const groundStations = [
@@ -184,6 +187,7 @@ onMounted(() => {
   orbitPathCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   // beamCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   dataLinksCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
+  cairoLinksCollection = viewer.scene.primitives.add(new Cesium.PolylineCollection());
   // groundStationsCollection = viewer.scene.primitives.add(new Cesium.PointPrimitiveCollection());
   
   // initGroundStations();
@@ -268,6 +272,9 @@ const drawCairoHexagons = () => {
   const metersPerDegLat = 111320;
   const metersPerDegLon = 111320 * Math.cos(centerLat * Math.PI / 180);
 
+  // Clear previous data
+  cairoHexagonData = [];
+
   qrs.forEach((hex, index) => {
     const x_m = radius * Math.sqrt(3) * (hex.q + hex.r / 2);
     const y_m = radius * 3/2 * hex.r;
@@ -277,6 +284,13 @@ const drawCairoHexagons = () => {
 
     const hexCenterLon = centerLon + dLon;
     const hexCenterLat = centerLat + dLat;
+
+    // Store center data for hit testing
+    cairoHexagonData.push({
+      center: Cesium.Cartesian3.fromDegrees(hexCenterLon, hexCenterLat),
+      lat: hexCenterLat,
+      lon: hexCenterLon
+    });
 
     const positions = [];
     for (let i = 0; i < 6; i++) {
@@ -288,8 +302,9 @@ const drawCairoHexagons = () => {
       positions.push(hexCenterLat + (py / metersPerDegLat));
     }
 
-    viewer.entities.add({
+    const entity = viewer.entities.add({
       name: `Cairo Hexagon ${index + 1}`,
+      show: props.cairoHighlightEnabled, // Initial visibility based on prop
       polygon: {
         hierarchy: Cesium.Cartesian3.fromDegreesArray(positions),
         material: Cesium.Color.fromCssColorString('#FFD700').withAlpha(0.3),
@@ -299,12 +314,22 @@ const drawCairoHexagons = () => {
         height: 0
       }
     });
+    cairoHexagonEntities.push(entity);
   });
 
   viewer.camera.flyTo({
     destination: Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 100000)
   });
+  
+  // Cache Cairo position for satellite checks
+  cairoCartesian = Cesium.Cartesian3.fromDegrees(centerLon, centerLat);
 };
+
+watch(() => props.cairoHighlightEnabled, (enabled) => {
+  cairoHexagonEntities.forEach(entity => {
+    entity.show = enabled;
+  });
+});
 
 const updateSatellites = () => {
   if (!isReady || !props.satellites.length) return;
@@ -353,9 +378,11 @@ const onTick = (clock: any) => {
   }
 
   // 飞线更新逻辑：每帧清空，重新按需生成
-  // 性能优化：仅当集合不为空时才执行移除操作
   if (dataLinksCollection.length > 0) {
     dataLinksCollection.removeAll();
+  }
+  if (cairoLinksCollection.length > 0) {
+    cairoLinksCollection.removeAll();
   }
   
   const len = billboardCollection.length;
@@ -367,53 +394,111 @@ const onTick = (clock: any) => {
   // 分帧更新逻辑：每帧只更新 1/3 的卫星，降低主线程压力
   updateFrame = (updateFrame + 1) % UPDATE_DIVISOR;
 
-  for (let i = updateFrame; i < len; i += UPDATE_DIVISOR) {
-    const billboard = billboardCollection.get(i);
-    const sat = billboard.id as SatelliteInfo; 
-    const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
+  if (satPositions) {
+    // 1. 卫星位置更新循环 (分帧执行，降低渲染压力)
+    for (let i = updateFrame; i < len; i += UPDATE_DIVISOR) {
+      const billboard = billboardCollection.get(i);
+      const sat = billboard.id as SatelliteInfo; 
+      const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
 
-    if (!satPositions) continue;
+      const px = satPositions[i * 3];
+      const py = satPositions[i * 3 + 1];
+      const pz = satPositions[i * 3 + 2];
 
-    // Use cached positions
-    const px = satPositions[i * 3];
-    const py = satPositions[i * 3 + 1];
-    const pz = satPositions[i * 3 + 2];
+      if (isNaN(px) || (px === 0 && py === 0 && pz === 0)) continue;
 
-    if (isNaN(px) || (px === 0 && py === 0 && pz === 0)) continue;
-
-    // 零 GC 优化：复用 scratchCartesian 对象
-    scratchCartesian.x = px;
-    scratchCartesian.y = py;
-    scratchCartesian.z = pz;
-    
-    // 视锥剔除/地平线剔除优化
-    if (!isSelected) {
-       const dot = (scratchCartesian.x * cameraPos.x + 
-                    scratchCartesian.y * cameraPos.y + 
-                    scratchCartesian.z * cameraPos.z);
-       
-       if (dot < 0) {
-          if (billboard.show) billboard.show = false;
-          continue;
-       } else {
-          if (!billboard.show) billboard.show = true;
-       }
-    } else {
-       if (!billboard.show) billboard.show = true;
-    }
-    
-    billboard.position = scratchCartesian; 
-
-    // Update style - 性能优化：避免重复赋值，仅在状态改变时更新
-    if (isSelected) {
-      if (billboard.scale !== 0.3) {
-        billboard.color = Cesium.Color.YELLOW;
-        billboard.scale = 0.3;
+      // 零 GC 优化：复用 scratchCartesian 对象
+      scratchCartesian.x = px;
+      scratchCartesian.y = py;
+      scratchCartesian.z = pz;
+      
+      // 视锥剔除/地平线剔除优化
+      if (!isSelected) {
+         const dot = (scratchCartesian.x * cameraPos.x + 
+                      scratchCartesian.y * cameraPos.y + 
+                      scratchCartesian.z * cameraPos.z);
+         
+         if (dot < 0) {
+            if (billboard.show) billboard.show = false;
+            continue;
+         } else {
+            if (!billboard.show) billboard.show = true;
+         }
+      } else {
+         if (!billboard.show) billboard.show = true;
       }
-    } else {
-      if (billboard.scale !== 0.1) {
-        billboard.color = Cesium.Color.WHITE;
-        billboard.scale = 0.1;
+      
+      billboard.position = scratchCartesian; 
+    }
+
+    // 2. 业务逻辑循环 (全量执行，确保连线和颜色状态实时准确)
+    // 这里的计算量主要是距离判断，比 DOM/WebGL 操作轻得多，可以每帧全量跑
+    const cairoEnabled = props.cairoHighlightEnabled && cairoCartesian;
+    const CAIRO_PROXIMITY_SQ = 1000000000000; // 1000km squared
+    const HEX_RADIUS_DEG_SQ = 0.0247; // ~17.5km squared in degrees
+
+    for (let i = 0; i < len; i++) {
+      const billboard = billboardCollection.get(i);
+      const sat = billboard.id as SatelliteInfo;
+      const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
+
+      const px = satPositions[i * 3];
+      const py = satPositions[i * 3 + 1];
+      const pz = satPositions[i * 3 + 2];
+
+      if (isNaN(px) || (px === 0 && py === 0 && pz === 0)) continue;
+
+      let isOverCairo = false;
+
+      if (cairoEnabled) {
+        // 手动计算距离平方，避免创建对象
+        const dx = px - cairoCartesian.x;
+        const dy = py - cairoCartesian.y;
+        const dz = pz - cairoCartesian.z;
+        const distSq = dx*dx + dy*dy + dz*dz;
+
+        if (distSq < CAIRO_PROXIMITY_SQ) {
+          // 只有在粗略范围内才进行昂贵的经纬度转换
+          const satPos = new Cesium.Cartesian3(px, py, pz);
+          const satCartographic = Cesium.Cartographic.fromCartesian(satPos);
+          const satLat = satCartographic.latitude * 180 / Math.PI;
+          const satLon = satCartographic.longitude * 180 / Math.PI;
+          const cosLat = Math.cos(satCartographic.latitude);
+
+          for (const hex of cairoHexagonData) {
+            const dLat = satLat - hex.lat;
+            const dLon = (satLon - hex.lon) * cosLat;
+            
+            if (dLat*dLat + dLon*dLon < HEX_RADIUS_DEG_SQ) {
+               isOverCairo = true;
+               // 绘制连线：使用 new Cartesian3 确保坐标引用独立，防止连线错乱
+               cairoLinksCollection.add({
+                 positions: [hex.center, satPos],
+                 width: 2,
+                 material: Cesium.Material.fromType('Color', { color: Cesium.Color.CYAN.withAlpha(0.6) })
+               });
+               break; 
+            }
+          }
+        }
+      }
+
+      // 更新颜色状态 (全量更新，防止状态滞留)
+      if (isSelected) {
+        if (billboard.scale !== 0.3) {
+          billboard.color = Cesium.Color.YELLOW;
+          billboard.scale = 0.3;
+        }
+      } else if (isOverCairo) {
+        if (billboard.scale !== 0.101) {
+          billboard.color = Cesium.Color.RED;
+          billboard.scale = 0.101;
+        }
+      } else {
+        if (billboard.scale !== 0.1) {
+          billboard.color = Cesium.Color.WHITE;
+          billboard.scale = 0.1;
+        }
       }
     }
   }
