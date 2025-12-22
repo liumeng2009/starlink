@@ -1,0 +1,19 @@
+{
+  "options": {
+    "paths": {
+      "root": "",
+      "fonts": "fonts",
+      "styles": ""
+    },
+    "serveAllFonts": true
+  },
+  "styles": {
+    "africa": {
+      "style": "tileserver-style.json",
+      "tilejson": {
+        "bounds": [-180, -90, 180, 90]
+      }
+    }
+  },
+  "data": {}
+}

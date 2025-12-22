@@ -21,11 +21,27 @@ const generateMockStarlinkTrain = (count: number, startId: number): string[] => 
 };
 
 export const fetchStarlinkTLEs = async (): Promise<TLEData[]> => {
+  const CACHE_KEY = 'starlink_tle_data';
+  const CACHE_TIME_KEY = 'starlink_tle_timestamp';
+  const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
+  // 1. Check LocalStorage Cache
+  const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
+  const cachedData = localStorage.getItem(CACHE_KEY);
+
+  if (cachedTime && cachedData) {
+    const age = Date.now() - parseInt(cachedTime, 10);
+    if (age < CACHE_DURATION) {
+      console.log(`Using cached TLE data (${(age / 1000 / 60).toFixed(1)} mins old)`);
+      return parseTLE(cachedData);
+    }
+  }
+
   try {
     // Attempt to fetch live data from Celestrak
     // 'starlink' group on Celestrak is comprehensive.
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // Increase timeout to 15s
 
     // 星历接口
     const response = await fetch('https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle', {
@@ -39,7 +55,16 @@ export const fetchStarlinkTLEs = async (): Promise<TLEData[]> => {
     }
     
     const text = await response.text();
-    return parseTLE(text); // Limit to first 100 for performance
+    
+    // 2. Save to LocalStorage
+    try {
+      localStorage.setItem(CACHE_KEY, text);
+      localStorage.setItem(CACHE_TIME_KEY, Date.now().toString());
+    } catch (e) {
+      console.warn("LocalStorage quota exceeded, cannot cache TLE data.");
+    }
+
+    return parseTLE(text); 
 
   } catch (error) {
     console.warn("Failed to fetch live TLEs (likely network or CORS restriction), switching to simulation mode.", error);

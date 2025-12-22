@@ -1,0 +1,217 @@
+{
+  "version": 8,
+  "name": "Starlink Light Style",
+  "glyphs": "http://localhost:8001/fonts/{fontstack}/{range}.pbf",
+  "sources": {
+    "africa-source": {
+      "type": "vector",
+      "tiles": [
+        "http://localhost:8000/africa/{z}/{x}/{y}.mvt"
+      ],
+      "minzoom": 0,
+      "maxzoom": 20
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#F8F9FA"
+      }
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "africa-source",
+      "source-layer": "water",
+      "paint": {
+        "fill-color": "#FFED6F",
+        "fill-opacity": 0.6
+      }
+    },
+    {
+      "id": "waterway",
+      "type": "line",
+      "source": "africa-source",
+      "source-layer": "waterway",
+      "paint": {
+        "line-color": "#FFFFB3",
+        "line-width": 1
+      }
+    },
+    {
+      "id": "landcover",
+      "type": "fill",
+      "source": "africa-source",
+      "source-layer": "landcover",
+      "paint": {
+        "fill-color": "#FB8072",
+        "fill-opacity": 0.4
+      }
+    },
+    {
+      "id": "landuse",
+      "type": "fill",
+      "source": "africa-source",
+      "source-layer": "landuse",
+      "paint": {
+        "fill-color": "#80B1D3",
+        "fill-opacity": 0.4
+      }
+    },
+    {
+      "id": "park",
+      "type": "fill",
+      "source": "africa-source",
+      "source-layer": "park",
+      "paint": {
+        "fill-color": "#B3DE69",
+        "fill-opacity": 0.5
+      }
+    },
+    {
+      "id": "boundary",
+      "type": "line",
+      "source": "africa-source",
+      "source-layer": "boundary",
+      "layout": {
+        "line-join": "round",
+        "line-cap": "round"
+      },
+      "paint": {
+        "line-color": "#BEBADA",
+        "line-width": 1
+      }
+    },
+    {
+      "id": "aeroway",
+      "type": "line",
+      "source": "africa-source",
+      "source-layer": "aeroway",
+      "paint": {
+        "line-color": "#FFFFB3",
+        "line-width": 1.5
+      }
+    },
+    {
+      "id": "transportation",
+      "type": "line",
+      "source": "africa-source",
+      "source-layer": "transportation",
+      "paint": {
+        "line-color": "#BC80BD",
+        "line-width": 1
+      }
+    },
+    {
+      "id": "water_name",
+      "type": "symbol",
+      "source": "africa-source",
+      "source-layer": "water_name",
+      "layout": {
+        "symbol-placement": "line",
+        "symbol-spacing": 500,
+        "text-field": "{name}",
+        "text-font": ["Open Sans Semibold"],
+        "text-rotation-alignment": "map",
+        "text-size": 12
+      },
+      "paint": {
+        "text-color": "#0066CC",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 2
+      }
+    },
+    {
+      "id": "transportation_name",
+      "type": "symbol",
+      "source": "africa-source",
+      "source-layer": "transportation_name",
+      "layout": {
+        "text-field": "{name}",
+        "text-font": ["Open Sans Semibold"],
+        "text-size": 10
+      },
+      "paint": {
+        "text-color": "#CCEBC5",
+        "text-halo-color": "#000000",
+        "text-halo-width": 1
+      }
+    },
+    {
+      "id": "place-circle",
+      "type": "circle",
+      "source": "africa-source",
+      "source-layer": "place",
+      "paint": {
+        "circle-color": "#FCCDE5",
+        "circle-radius": 3,
+        "circle-stroke-width": 1,
+        "circle-stroke-color": "#ffffff"
+      }
+    },
+    {
+      "id": "place-label",
+      "type": "symbol",
+      "source": "africa-source",
+      "source-layer": "place",
+      "layout": {
+        "text-field": "{name}",
+        "text-font": ["Open Sans Semibold"],
+        "text-size": 12,
+        "text-offset": [0, 1.2],
+        "text-anchor": "top"
+      },
+      "paint": {
+        "text-color": "#334155",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 2
+      }
+    },
+    {
+      "id": "poi",
+      "type": "circle",
+      "source": "africa-source",
+      "source-layer": "poi",
+      "minzoom": 12,
+      "paint": {
+        "circle-color": "#D9D9D9",
+        "circle-radius": 2
+      }
+    },
+    {
+      "id": "mountain_peak",
+      "type": "symbol",
+      "source": "africa-source",
+      "source-layer": "mountain_peak",
+      "layout": {
+        "text-field": "{name}\n{elevation_m}m",
+        "text-font": ["Open Sans Semibold"],
+        "text-size": 10,
+        "text-offset": [0, 0]
+      },
+      "paint": {
+        "text-color": "#FDB462",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1
+      }
+    },
+    {
+      "id": "aerodrome_label",
+      "type": "symbol",
+      "source": "africa-source",
+      "source-layer": "aerodrome_label",
+      "layout": {
+        "text-field": "{name}",
+        "text-font": ["Open Sans Semibold"],
+        "text-size": 10
+      },
+      "paint": {
+        "text-color": "#8DD3C7",
+        "text-halo-color": "#000000",
+        "text-halo-width": 1
+      }
+    }
+  ]
+}

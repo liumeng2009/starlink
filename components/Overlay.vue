@@ -9,13 +9,13 @@ const props = defineProps<{
   currentTime: Date;
   fps: number;
   sceneMode: '3D' | '2D';
-  layerMode: 'MVT' | 'ArcGIS';
+  layerMode: 'MVT' | 'ArcGIS' | 'None';
 }>();
 
 const emit = defineEmits<{
   (e: 'closeSelection'): void;
   (e: 'update:sceneMode', mode: '3D' | '2D'): void;
-  (e: 'update:layerMode', mode: 'MVT' | 'ArcGIS'): void;
+  (e: 'update:layerMode', mode: 'MVT' | 'ArcGIS' | 'None'): void;
 }>();
 
 const liveStats = ref<{lat: number, lon: number, height: number, velocity: number} | null>(null);
@@ -71,6 +71,13 @@ watch(() => [props.selectedSatellite, props.currentTime], () => {
             :class="layerMode === 'ArcGIS' ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'"
           >
             ArcGIS
+          </button>
+          <button 
+            @click="emit('update:layerMode', 'None')"
+            class="px-4 py-2 rounded-md transition-all duration-200 text-xs font-bold uppercase"
+            :class="layerMode === 'None' ? 'bg-cyan-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'"
+          >
+            None
           </button>
         </div>
 

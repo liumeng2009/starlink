@@ -12,7 +12,7 @@ const props = defineProps<{
   isPaused: boolean;
   manualTime: Date | null;
   sceneMode: '3D' | '2D';
-  layerMode: 'MVT' | 'ArcGIS';
+  layerMode: 'MVT' | 'ArcGIS' | 'None';
 }>();
 
 const emit = defineEmits<{
@@ -39,12 +39,17 @@ const toggleLayer = () => {
   if (!viewer) return;
   viewer.imageryLayers.removeAll();
   
+  if (props.layerMode === 'None') {
+    return;
+  }
+
   if (props.layerMode === 'MVT') {
     try {
       // 改用 UrlTemplateImageryProvider 加载服务端渲染好的 PNG 切片
       // 这种方式对浏览器性能消耗极低，因为不需要在前端进行矢量光栅化
+      // 注意：端口改为 8001 (tileserver-gl 的端口)，确保请求的是 PNG 而不是 MVT
       const provider = new Cesium.UrlTemplateImageryProvider({
-        url: 'http://localhost:8000/africa/{z}/{x}/{y}.png',
+        url: 'http://localhost:8001/styles/africa/{z}/{x}/{y}.png',
         credit: 'Localhost PNG',
         maximumLevel: 14, // 根据你的切片数据调整最大层级
       });
@@ -52,7 +57,7 @@ const toggleLayer = () => {
     } catch (e) {
       console.error("Failed to load PNG provider", e);
     }
-  } else {
+  } else if (props.layerMode === 'ArcGIS') {
     try {
       Cesium.ArcGisMapServerImageryProvider.fromUrl(
         "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer"
@@ -75,9 +80,8 @@ let satPositions: Float32Array | null = null;
 // 性能优化控制变量
 let frameCount = 0;
 let lastFpsUpdateTime = performance.now();
-let updateTicket = 0; // 用于分帧更新的计数器
-const BATCH_COUNT = 60; // 调整为 60 帧 (约1秒) 更新一次 SGP4，平衡精度与性能
-const INTERPOLATION_FREQ = 2; // 恢复每帧更新插值，消除 30fps 的卡顿感
+const UPDATE_DIVISOR = 3; // 分3帧完成所有卫星更新，降低主线程压力
+let updateFrame = 0;
 
 let isWorkerBusy = false;
 
@@ -273,7 +277,11 @@ const onTick = (clock: any) => {
   if (!billboardCollection || !isReady) return;
   
   const now = Cesium.JulianDate.toDate(clock.currentTime);
-  emit('tick', now);
+  
+  // 性能优化：限制 Vue 事件触发频率 (每 5 帧触发一次)，减少主线程 Vue Reactivity 开销
+  if (frameCount % 5 === 0) {
+    emit('tick', now);
+  }
 
   // Request worker update if idle
   if (!isWorkerBusy) {
@@ -287,7 +295,10 @@ const onTick = (clock: any) => {
   }
 
   // 飞线更新逻辑：每帧清空，重新按需生成
-  dataLinksCollection.removeAll();
+  // 性能优化：仅当集合不为空时才执行移除操作
+  if (dataLinksCollection.length > 0) {
+    dataLinksCollection.removeAll();
+  }
   
   const len = billboardCollection.length;
   const gsCartesians = groundStations.map(gs => Cesium.Cartesian3.fromDegrees(gs.lon, gs.lat));
@@ -295,7 +306,10 @@ const onTick = (clock: any) => {
   // 性能优化：获取相机位置用于视锥剔除 (简单的地平线剔除)
   const cameraPos = viewer.camera.position;
   
-  for (let i = 0; i < len; i++) {
+  // 分帧更新逻辑：每帧只更新 1/3 的卫星，降低主线程压力
+  updateFrame = (updateFrame + 1) % UPDATE_DIVISOR;
+
+  for (let i = updateFrame; i < len; i += UPDATE_DIVISOR) {
     const billboard = billboardCollection.get(i);
     const sat = billboard.id as SatelliteInfo; 
     const isSelected = props.selectedSatelliteId && sat.id === props.selectedSatelliteId;
@@ -332,13 +346,17 @@ const onTick = (clock: any) => {
     
     billboard.position = scratchCartesian; 
 
-    // Update style
+    // Update style - 性能优化：避免重复赋值，仅在状态改变时更新
     if (isSelected) {
-      billboard.color = Cesium.Color.YELLOW;
-      billboard.scale = 0.3;
+      if (billboard.scale !== 0.3) {
+        billboard.color = Cesium.Color.YELLOW;
+        billboard.scale = 0.3;
+      }
     } else {
-      billboard.color = Cesium.Color.WHITE;
-      billboard.scale = 0.1;
+      if (billboard.scale !== 0.1) {
+        billboard.color = Cesium.Color.WHITE;
+        billboard.scale = 0.1;
+      }
     }
   }
 
