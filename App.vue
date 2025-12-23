@@ -17,7 +17,7 @@ const playbackSpeed = ref(1);
 const isPaused = ref(false);
 const manualSeekTime = ref<Date | null>(null);
 const sceneMode = ref<'3D' | '2D'>('3D');
-const layerMode = ref<'MVT' | 'ArcGIS' | 'None'>('MVT');
+const layerMode = ref<'MVT' | 'ArcGIS' | 'None'>('ArcGIS');
 const cairoHighlightEnabled = ref(false);
 const currentFps = ref(0);
 

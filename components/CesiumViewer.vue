@@ -356,7 +356,7 @@ const updateSatellites = () => {
       id: sat,
       // 增加近大远小的立体感：近处放大，远处缩小
       // 100km处放大2.5倍，20000km处缩小到0.5倍
-      scaleByDistance: new Cesium.NearFarScalar(1.0e5, 2.5, 2.0e7, 0.5)
+      scaleByDistance: new Cesium.NearFarScalar(1.0e5, 5, 2.0e7, 0.5)
     });
   });
 };
