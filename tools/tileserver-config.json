@@ -8,12 +8,16 @@
     "serveAllFonts": true
   },
   "styles": {
-    "africa": {
+    "basic": {
       "style": "tileserver-style.json",
       "tilejson": {
         "bounds": [-180, -90, 180, 90]
       }
     }
   },
-  "data": {}
+  "data": {
+    "openmaptiles": {
+      "mbtiles": "d:/world-map/central_america.osm.mbtiles"
+    }
+  }
 }

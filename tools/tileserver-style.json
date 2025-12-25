@@ -3,13 +3,9 @@
   "name": "Starlink Light Style",
   "glyphs": "http://localhost:8001/fonts/{fontstack}/{range}.pbf",
   "sources": {
-    "africa-source": {
+    "openmaptiles": {
       "type": "vector",
-      "tiles": [
-        "http://localhost:8000/africa/{z}/{x}/{y}.mvt"
-      ],
-      "minzoom": 0,
-      "maxzoom": 20
+      "url": "mbtiles://openmaptiles"
     }
   },
   "layers": [
@@ -23,7 +19,7 @@
     {
       "id": "water",
       "type": "fill",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "water",
       "paint": {
         "fill-color": "#FFED6F",
@@ -33,7 +29,7 @@
     {
       "id": "waterway",
       "type": "line",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "waterway",
       "paint": {
         "line-color": "#FFFFB3",
@@ -43,7 +39,7 @@
     {
       "id": "landcover",
       "type": "fill",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "landcover",
       "paint": {
         "fill-color": "#FB8072",
@@ -53,7 +49,7 @@
     {
       "id": "landuse",
       "type": "fill",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "landuse",
       "paint": {
         "fill-color": "#80B1D3",
@@ -63,7 +59,7 @@
     {
       "id": "park",
       "type": "fill",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "park",
       "paint": {
         "fill-color": "#B3DE69",
@@ -73,7 +69,7 @@
     {
       "id": "boundary",
       "type": "line",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "boundary",
       "layout": {
         "line-join": "round",
@@ -87,7 +83,7 @@
     {
       "id": "aeroway",
       "type": "line",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "aeroway",
       "paint": {
         "line-color": "#FFFFB3",
@@ -97,7 +93,7 @@
     {
       "id": "transportation",
       "type": "line",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "transportation",
       "paint": {
         "line-color": "#BC80BD",
@@ -107,7 +103,7 @@
     {
       "id": "water_name",
       "type": "symbol",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "water_name",
       "layout": {
         "symbol-placement": "line",
@@ -126,7 +122,7 @@
     {
       "id": "transportation_name",
       "type": "symbol",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "transportation_name",
       "layout": {
         "text-field": "{name}",
@@ -142,7 +138,7 @@
     {
       "id": "place-circle",
       "type": "circle",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "place",
       "paint": {
         "circle-color": "#FCCDE5",
@@ -154,7 +150,7 @@
     {
       "id": "place-label",
       "type": "symbol",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "place",
       "layout": {
         "text-field": "{name}",
@@ -172,7 +168,7 @@
     {
       "id": "poi",
       "type": "circle",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "poi",
       "minzoom": 12,
       "paint": {
@@ -183,7 +179,7 @@
     {
       "id": "mountain_peak",
       "type": "symbol",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "mountain_peak",
       "layout": {
         "text-field": "{name}\n{elevation_m}m",
@@ -200,7 +196,7 @@
     {
       "id": "aerodrome_label",
       "type": "symbol",
-      "source": "africa-source",
+      "source": "openmaptiles",
       "source-layer": "aerodrome_label",
       "layout": {
         "text-field": "{name}",

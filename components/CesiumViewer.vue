@@ -53,7 +53,7 @@ const toggleLayer = () => {
       // 这种方式对浏览器性能消耗极低，因为不需要在前端进行矢量光栅化
       // 注意：端口改为 8001 (tileserver-gl 的端口)，确保请求的是 PNG 而不是 MVT
       const provider = new Cesium.UrlTemplateImageryProvider({
-        url: 'http://localhost:8001/styles/africa/{z}/{x}/{y}.png',
+        url: 'http://localhost:8001/styles/basic/{z}/{x}/{y}.png',
         credit: 'Localhost PNG',
         maximumLevel: 14, // 根据你的切片数据调整最大层级
       });
@@ -146,7 +146,7 @@ onMounted(() => {
 
   // 1. 分辨率缩放：在视网膜屏幕上强制使用 1.0 或更低 (0.8-0.9) 以大幅降低片元着色器压力
   // 进一步降低分辨率以提升 FPS
-  viewer.resolutionScale = window.devicePixelRatio > 1 ? 0.7 : 0.7;
+  viewer.resolutionScale = window.devicePixelRatio > 1 ? 1 : 1;
 
   // 2. 关闭高动态范围渲染 (HDR)：减少显存带宽占用
   viewer.scene.highDynamicRange = false;
